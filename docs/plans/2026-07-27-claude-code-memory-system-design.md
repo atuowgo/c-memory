@@ -223,12 +223,23 @@ class TfidfProvider(EmbeddingProvider): ... # 本地 sklearn TfidfVectorizer
 
 以上均为常量，写在 `confidence.py` 顶部方便调整。
 
+### 6b. 语义去重（实测后追加）
+
+真实跑起来后发现：LLM 语义分析路径每次措辞不完全一样（"编辑文件前先阅读该文件" vs "编辑文件前先读取文件内容"），会把同一个真实习惯拆成好几条各自 confidence 很低的 instinct，永远凑不到 0.7 晋升阈值。追加一个轻量语义去重（`memory_lib/dedup.py`），不引入分词/embedding 依赖：
+
+- `char_jaccard(a, b)`：去空白后按单字符集合算 Jaccard 相似度，中文短句场景够用，能扛住同义词替换
+- `find_similar_instinct(pattern, domain, candidates)`：只在**同 domain** 内比较（domain 不同或任一为空直接跳过，避免跨主题误合并），相似度 >= `SIMILARITY_THRESHOLD`（0.45）且最高的一条判定为匹配
+- `extract.py` 的 `_update_hit_instincts`：处理每个候选前先跑一次相似度匹配，命中则复用已有 instinct 的 id（走更新分支，`confidence`/`hit_count` 正常演化），未命中才退化为精确 slug 匹配/新建；同一次运行内也会实时更新内存快照，让同一轮内的多个候选互相合并
+- 这是"轻量"版本，不是得物原文的 Jaccard(英文关键词) + Union-Find 方案，阈值也是拍脑袋定的粗调值，不保证覆盖所有换词场景（比如"修改代码前习惯先查看文件内容"这种用词差异更大的表述就没被上面两条捕获到）
+
 ## 7. 隐私过滤
 
-写入 `observations.jsonl` 前统一经过 `privacy.py`：
+**采集阶段（`observe.py`）**：不管什么工具，`tool_response`（文件内容/命令输出等）一律不落盘。`tool_input` 也不是原样存——`privacy.py` 里的 `extract_behavioral_signal(tool_name, tool_input)` 按工具类型只保留行为信号字段：`Read`/`Edit`/`Write`/`MultiEdit` 只留 `file_path`，`Bash` 只留 `command`，`Grep`/`Glob` 只留 `pattern`/`path`，未知工具只留看起来像路径的字段；`content`/`old_string`/`new_string` 这类内容字段一律丢弃，因为没有任何检测器需要它们。去重用的哈希 key 仍然基于原始 `tool_input` 计算（只在内存里参与哈希，不落盘），保证同一文件的不同编辑不会被误判为重复。
+
+**写入前再过一遍 `filter_sensitive`**（双保险，防止 command 参数等字段里意外带了密钥）：
 
 - 正则屏蔽：`sk-[A-Za-z0-9]{20,}`、`ark-[A-Za-z0-9-]{20,}`、通用 `(api[_-]?key|token|password)\s*[:=]\s*\S+`，命中替换为 `***REDACTED***`
-- 敏感文件名整条丢内容：`tool_input` 涉及路径匹配 `.env`/`*.pem`/`*credentials*` 时，只保留 `tool_name` 和文件名，不留内容
+- 敏感文件名整条丢内容：路径匹配 `.env`/`.pem`/`.key`/`id_rsa`/`.npmrc`/`.aws`/`credentials`/`secrets` 关键字时，只保留 `tool_name` 和文件名，不留内容
 - 测试用例直接取本仓库 `.env` 里真实格式的 key（值本身不进代码库，只用格式做正则测试 fixture）
 
 ## 8. 文件轮转/归档

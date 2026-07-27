@@ -11,10 +11,37 @@ _PATTERNS = [
     re.compile(r"(?i)(api[_-]?key|token|password)\s*[:=]\s*\S+"),
 ]
 
-_SENSITIVE_FILE_KEYWORDS = (".env", ".pem", "credentials")
+_SENSITIVE_FILE_KEYWORDS = (".env", ".pem", ".key", "id_rsa", ".npmrc", ".aws", "credentials", "secrets")
 
 # 可能携带文件路径的字段名（tool_input 内常见 key + 顶层可能出现的字段）
 _PATH_FIELD_CANDIDATES = ("file_path", "path", "notebook_path", "filename")
+
+# 每种工具只保留“行为信号”字段（路径/命令），不保留内容字段
+# （如 Write 的 content、Edit 的 old_string/new_string），也不保留 tool_response。
+# 未知工具 fallback 到 _PATH_FIELD_CANDIDATES：只留看起来像路径的字段，其余一律丢弃。
+_BEHAVIORAL_FIELDS = {
+    "Read": ("file_path",),
+    "Edit": ("file_path",),
+    "Write": ("file_path",),
+    "MultiEdit": ("file_path",),
+    "NotebookEdit": ("notebook_path",),
+    "Bash": ("command",),
+    "Grep": ("pattern", "path"),
+    "Glob": ("pattern", "path"),
+}
+
+
+def extract_behavioral_signal(tool_name: str, tool_input) -> dict:
+    """只保留检测行为模式所需的结构化字段，不保留任何文件/命令输出内容。
+
+    已知工具（Read/Edit/Write/Bash 等）只留路径或命令本身；未知工具只留看起来
+    像路径的字段。其余字段（如 Write 的 content、Edit 的 old_string/new_string）
+    一律丢弃 —— 这些字段本来就不被任何检测器使用，却是内容泄漏风险最大的部分。
+    """
+    if not isinstance(tool_input, dict):
+        return {}
+    fields = _BEHAVIORAL_FIELDS.get(tool_name, _PATH_FIELD_CANDIDATES)
+    return {k: tool_input[k] for k in fields if k in tool_input}
 
 
 def is_sensitive_file(path: str) -> bool:

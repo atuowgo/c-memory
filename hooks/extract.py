@@ -29,6 +29,7 @@ from memory_lib.confidence import (  # noqa: E402
     INITIAL_CONFIDENCE,
     update_confidence,
 )
+from memory_lib.dedup import find_similar_instinct  # noqa: E402
 from memory_lib.detectors import detect_patterns  # noqa: E402
 from memory_lib.providers import get_llm_provider  # noqa: E402
 
@@ -103,14 +104,28 @@ def _run_llm_analysis(summary: str) -> dict:
 
 
 def _update_hit_instincts(candidates: list[dict], today: str) -> set[str]:
-    """处理本次会话命中的 instinct 候选：新建或更新 confidence，返回命中的 id 集合。"""
+    """处理本次会话命中的 instinct 候选：新建或更新 confidence，返回命中的 id 集合。
+
+    同一 domain 下先尝试用 char_jaccard 找语义相似的已有 instinct 合并命中，
+    避免 LLM 每次措辞不同（"编辑前先阅读"/"编辑前先读取"）把同一习惯拆成多条、
+    永远凑不够置信度晋升阈值。找不到相似的才退化为按 pattern 精确 slug 匹配/新建。
+    """
     hit_ids: set[str] = set()
+    known_instincts = storage.list_instincts(include_deprecated=True)
+
     for cand in candidates:
         pattern = (cand.get("pattern") or "").strip()
         if not pattern:
             continue
-        instinct_id = _slugify(pattern)
-        existing = storage.read_instinct(instinct_id)
+        domain = cand.get("domain", "")
+
+        similar = find_similar_instinct(pattern, domain, known_instincts)
+        if similar is not None:
+            instinct_id = similar["id"]
+            existing = similar
+        else:
+            instinct_id = _slugify(pattern)
+            existing = storage.read_instinct(instinct_id)
 
         if existing is None:
             frontmatter_dict = {
@@ -137,6 +152,10 @@ def _update_hit_instincts(candidates: list[dict], today: str) -> set[str]:
         body = cand.get("evidence") or pattern
         storage.write_instinct(instinct_id, frontmatter_dict, body)
         hit_ids.add(instinct_id)
+
+        # 更新本轮内存快照，让同一次运行里后续候选也能对这条刚写入/更新的记录做合并
+        known_instincts = [inst for inst in known_instincts if inst.get("id") != instinct_id]
+        known_instincts.append({**frontmatter_dict, "id": instinct_id, "body": body})
 
     return hit_ids
 

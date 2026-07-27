@@ -1,0 +1,42 @@
+"""memory_lib.dedup 单元测试。"""
+from __future__ import annotations
+
+from memory_lib.dedup import char_jaccard, find_similar_instinct
+
+
+def test_char_jaccard_identical_strings_is_one():
+    assert char_jaccard("编辑文件前先阅读该文件", "编辑文件前先阅读该文件") == 1.0
+
+
+def test_char_jaccard_unrelated_strings_is_low():
+    assert char_jaccard("编辑文件前先阅读该文件", "使用git进行版本控制") < 0.3
+
+
+def test_char_jaccard_empty_string_is_zero():
+    assert char_jaccard("", "任意文本") == 0.0
+    assert char_jaccard("任意文本", "") == 0.0
+
+
+def test_find_similar_instinct_merges_same_domain_reworded_pattern():
+    candidates = [
+        {"id": "a", "domain": "代码编辑", "pattern": "编辑文件前先阅读该文件"},
+    ]
+    match = find_similar_instinct("编辑文件前先读取文件内容", "代码编辑", candidates)
+    assert match is not None
+    assert match["id"] == "a"
+
+
+def test_find_similar_instinct_rejects_cross_domain():
+    candidates = [
+        {"id": "a", "domain": "版本控制", "pattern": "使用rtk工具封装git命令"},
+    ]
+    match = find_similar_instinct("使用rtk作为git命令前缀", "工具使用", candidates)
+    assert match is None
+
+
+def test_find_similar_instinct_no_match_returns_none():
+    candidates = [
+        {"id": "a", "domain": "代码编辑", "pattern": "编辑文件前先阅读该文件"},
+    ]
+    match = find_similar_instinct("完全不相关的另一个习惯描述", "代码编辑", candidates)
+    assert match is None

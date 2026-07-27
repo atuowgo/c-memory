@@ -21,7 +21,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from memory_lib.privacy import filter_sensitive  # noqa: E402
+from memory_lib.privacy import extract_behavioral_signal, filter_sensitive  # noqa: E402
 from memory_lib.storage import (  # noqa: E402
     append_observation,
     read_dedup_state,
@@ -51,18 +51,21 @@ def main() -> None:
     session_id = payload.get("session_id")
     tool_name = payload.get("tool_name")
     tool_input = payload.get("tool_input") or {}
-    tool_response = payload.get("tool_response")
+    # tool_response（文件内容/命令输出等）不落盘：detectors 只需要 tool_name +
+    # 路径/命令这类结构信号就能识别行为模式，没有必要、也不应该保留实际内容。
+    signal = extract_behavioral_signal(tool_name, tool_input)
 
     now = datetime.now(timezone.utc)
     record = {
         "session_id": session_id,
         "ts": now.isoformat(),
         "tool_name": tool_name,
-        "tool_input": tool_input,
-        "tool_response": tool_response,
+        "tool_input": signal,
     }
     filtered_record = filter_sensitive(record)
 
+    # 去重 key 用原始 tool_input 算（不落盘，只在内存里参与哈希），
+    # 保证同一文件的不同编辑内容仍被视为不同调用，不会被误判为重复。
     key = _dedup_key(tool_name, tool_input)
     state = read_dedup_state()
 
