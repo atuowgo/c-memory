@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+memory/*.jsonl
+memory/.dedup_state.json
+.pytest_cache/
