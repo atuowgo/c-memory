@@ -24,14 +24,33 @@ if str(_REPO_ROOT) not in sys.path:
 
 from memory_lib.providers import get_embedding_provider  # noqa: E402
 from memory_lib.recall import build_query, recall_top_k  # noqa: E402
-from memory_lib.storage import list_memories  # noqa: E402
+from memory_lib.storage import list_memories, list_promoted_instincts  # noqa: E402
+
+
+# type 取值对齐得物 extract_memories.py 的枚举（project/feedback/error/workflow），
+# 未知/缺失类型退化为 [user]，跟之前保持一致。
+_TYPE_LABELS = {
+    "project": "[project]",
+    "feedback": "[feedback]",
+    "error": "[error]",
+    "workflow": "[workflow]",
+}
 
 
 def _format_memories(top_memories: list[dict]) -> str:
     lines = []
     for mem in top_memories:
-        label = "[project]" if mem.get("type") == "project" else "[user]"
+        label = _TYPE_LABELS.get(mem.get("type"), "[user]")
         lines.append(f"{label} {mem.get('body', '').strip()}")
+    return "\n".join(lines)
+
+
+def _format_instincts(instincts: list[dict]) -> str:
+    lines = []
+    for inst in instincts:
+        domain = inst.get("domain", "")
+        pattern = inst.get("pattern", "")
+        lines.append(f"[habit][{domain}] {pattern}")
     return "\n".join(lines)
 
 
@@ -42,18 +61,24 @@ def main() -> None:
     except (json.JSONDecodeError, ValueError):
         cwd = os.getcwd()
 
+    sections = []
+
+    instincts = list_promoted_instincts()
+    if instincts:
+        sections.append(_format_instincts(instincts))
+
     memories = list_memories()
-    if not memories:
+    if memories:
+        query = build_query(cwd)
+        provider = get_embedding_provider()
+        top_memories = recall_top_k(query, memories, provider, k=5)
+        if top_memories:
+            sections.append(_format_memories(top_memories))
+
+    if not sections:
         return
 
-    query = build_query(cwd)
-    provider = get_embedding_provider()
-    top_memories = recall_top_k(query, memories, provider, k=5)
-
-    if not top_memories:
-        return
-
-    print(_format_memories(top_memories))
+    print("\n".join(sections))
 
 
 if __name__ == "__main__":

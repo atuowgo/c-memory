@@ -1,7 +1,7 @@
 """memory_lib.dedup 单元测试。"""
 from __future__ import annotations
 
-from memory_lib.dedup import char_jaccard, find_similar_instinct
+from memory_lib.dedup import char_jaccard, find_similar_instinct, find_similar_memory
 
 
 def test_char_jaccard_identical_strings_is_one():
@@ -39,4 +39,31 @@ def test_find_similar_instinct_no_match_returns_none():
         {"id": "a", "domain": "代码编辑", "pattern": "编辑文件前先阅读该文件"},
     ]
     match = find_similar_instinct("完全不相关的另一个习惯描述", "代码编辑", candidates)
+    assert match is None
+
+
+def test_find_similar_memory_merges_reworded_fact_sharing_keyword():
+    candidates = [
+        {"id": "a", "keywords": ["gitignore"], "body": "项目使用 gitignore 忽略 env 和 pycache"},
+    ]
+    match = find_similar_memory(
+        "项目用 gitignore 忽略 env pycache 等文件", ["gitignore"], candidates
+    )
+    assert match is not None
+    assert match["id"] == "a"
+
+
+def test_find_similar_memory_rejects_no_shared_keyword():
+    candidates = [
+        {"id": "a", "keywords": ["pytest"], "body": "项目使用 pytest 作为测试框架"},
+    ]
+    match = find_similar_memory("项目使用 pnpm 管理依赖", ["pnpm"], candidates)
+    assert match is None
+
+
+def test_find_similar_memory_no_keywords_returns_none():
+    candidates = [
+        {"id": "a", "keywords": [], "body": "项目使用 pytest 作为测试框架"},
+    ]
+    match = find_similar_memory("项目使用 pytest 作为测试框架", [], candidates)
     assert match is None

@@ -93,3 +93,38 @@ def test_filter_sensitive_replaces_content_but_keeps_other_fields():
     assert result["tool_name"] == "Read"
     assert result["session_id"] == "session-123"
     assert result["ts"] == "2026-07-27T00:00:00Z"
+
+
+def test_filter_sensitive_redacts_tool_response_summary_on_sensitive_file():
+    record = {
+        "tool_name": "Read",
+        "tool_input": {"file_path": "/repo/.env"},
+        "tool_response_summary": f"SECRET_TOKEN={_FAKE_SK_KEY}",
+    }
+    result = filter_sensitive(record)
+
+    assert result["tool_response_summary"] == "<REDACTED: sensitive file>"
+    assert _FAKE_SK_KEY not in str(result)
+
+
+def test_github_token_redacted():
+    fake_ghp = "ghp_" + "c" * 36
+    record = {"text": f"token is {fake_ghp}"}
+    result = filter_sensitive(record)
+    assert fake_ghp not in result["text"]
+    assert "***REDACTED***" in result["text"]
+
+
+def test_aws_access_key_redacted():
+    fake_akia = "AKIA" + "D" * 16
+    record = {"text": f"key is {fake_akia}"}
+    result = filter_sensitive(record)
+    assert fake_akia not in result["text"]
+    assert "***REDACTED***" in result["text"]
+
+
+def test_bearer_token_redacted():
+    record = {"text": "Authorization: Bearer " + "e" * 20}
+    result = filter_sensitive(record)
+    assert "e" * 20 not in result["text"]
+    assert "***REDACTED***" in result["text"]

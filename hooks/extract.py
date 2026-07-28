@@ -3,7 +3,9 @@
 
 输入协议（Claude Code 官方 Hooks 文档，Stop 事件）：
 stdin 接收一段 JSON，字段包括 session_id / transcript_path / cwd /
-hook_event_name（固定 "Stop"）。Stop Hook 是会话级别的，不含具体工具调用信息。
+hook_event_name（固定 "Stop"）/ last_assistant_message（本轮最终 assistant 文本，
+官方文档建议 Stop/SubagentStop 场景用这个字段而不是读 transcript_path，因为
+transcript 文件是异步写入的，触发时可能还没落盘最新一轮）。
 
 约束：脚本必须永远以 exit code 0 结束，不能阻塞会话结束；调试/错误信息一律写 stderr。
 """
@@ -23,13 +25,9 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from memory_lib import storage  # noqa: E402
-from memory_lib.confidence import (  # noqa: E402
-    DEPRECATE_THRESHOLD,
-    INITIAL_CONFIDENCE,
-    update_confidence,
-)
-from memory_lib.dedup import find_similar_instinct  # noqa: E402
+from memory_lib import observation_store, storage  # noqa: E402
+from memory_lib.confidence import INITIAL_CONFIDENCE, update_confidence  # noqa: E402
+from memory_lib.dedup import find_similar_instinct, find_similar_memory  # noqa: E402
 from memory_lib.detectors import detect_patterns  # noqa: E402
 from memory_lib.providers import get_llm_provider  # noqa: E402
 
@@ -44,24 +42,6 @@ def _slugify(text: str) -> str:
     if not slug:
         slug = hashlib.md5((text or "").encode("utf-8")).hexdigest()[:8]
     return slug[:80]
-
-
-def _load_session_observations(session_id: str) -> list[dict]:
-    if not storage.OBSERVATIONS_FILE.exists():
-        return []
-    results = []
-    with open(storage.OBSERVATIONS_FILE, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if record.get("session_id") == session_id:
-                results.append(record)
-    return results
 
 
 def _summarize(observations: list[dict]) -> str:
@@ -89,11 +69,16 @@ def _summarize(observations: list[dict]) -> str:
     return summary
 
 
-def _run_llm_analysis(summary: str) -> dict:
-    """跑 LLM 语义分析路径；任何异常（含 LLMProviderError）都降级为空结果，不影响统计路径。"""
+def _run_llm_analysis(summary: str, last_message: str) -> dict:
+    """跑 LLM 语义分析路径；任何异常（含 LLMProviderError）都降级为空结果，不影响统计路径。
+
+    last_message 对齐得物 extract_memories.py 的数据源优先级：Stop Hook 官方提供的
+    last_assistant_message（避免读 transcript_path，文档明确说明该文件写入是异步的，
+    触发时可能还没写进本轮最新内容）。
+    """
     try:
         provider = get_llm_provider()
-        result = provider.analyze(summary)
+        result = provider.analyze(summary, last_message)
         return {
             "instincts": result.get("instincts") or [],
             "project_facts": result.get("project_facts") or [],
@@ -160,65 +145,71 @@ def _update_hit_instincts(candidates: list[dict], today: str) -> set[str]:
     return hit_ids
 
 
-def _decay_missed_instincts(hit_ids: set[str]) -> None:
-    """本次会话未观测到的已有活跃 instinct：confidence 衰减，跌破阈值则标记 deprecated。
-
-    只更新 confidence/deprecated，last_seen 及其余字段保持不动（本次没有被观测到）。
-    """
-    for inst in storage.list_instincts(include_deprecated=False):
-        instinct_id = inst.get("id")
-        if instinct_id in hit_ids:
-            continue
-
-        frontmatter_dict = dict(inst)
-        body = frontmatter_dict.pop("body", "")
-        new_confidence = update_confidence(
-            frontmatter_dict.get("confidence", INITIAL_CONFIDENCE), hit=False
-        )
-        frontmatter_dict["confidence"] = new_confidence
-        if new_confidence < DEPRECATE_THRESHOLD:
-            frontmatter_dict["deprecated"] = True
-
-        storage.write_instinct(instinct_id, frontmatter_dict, body)
-
-
 def _write_project_facts(facts: list[dict], today: str) -> None:
+    """同一事实即使 LLM 每次措辞不同，也应合并到同一条 memory 而不是各自新建文件。
+
+    project_facts 没有 domain 字段，find_similar_memory 改用 keywords 交集做分组门槛，
+    命中的话覆盖已有 memory_id（文本更新为最新措辞），逻辑与 instincts 的语义去重对称。
+    """
+    known_memories = storage.list_memories()
+
     for fact in facts:
         fact_text = (fact.get("fact") or "").strip()
         if not fact_text:
             continue
-        memory_id = _slugify(fact_text)
+        keywords = fact.get("keywords", [])
+        fact_type = fact.get("type") or "project"
+
+        similar = find_similar_memory(fact_text, keywords, known_memories)
+        memory_id = similar["id"] if similar is not None else _slugify(fact_text)
+
         storage.write_memory(
             memory_id,
-            {"type": "project", "keywords": fact.get("keywords", []), "created": today},
+            {"type": fact_type, "keywords": keywords, "created": today},
             fact_text,
+        )
+
+        known_memories = [m for m in known_memories if m.get("id") != memory_id]
+        known_memories.append(
+            {"id": memory_id, "keywords": keywords, "body": fact_text, "type": fact_type, "created": today}
         )
 
 
 def main() -> None:
     payload = json.load(sys.stdin)
     session_id = payload.get("session_id")
+    last_message = payload.get("last_assistant_message", "")
+    if not session_id:
+        return
 
-    storage.rotate_if_needed()
+    after_id = observation_store.try_claim_session(session_id)
+    if after_id is None:
+        return  # 同一 session 已有一次处理在跑（且未超时），本次跳过，不同步等待
 
-    session_observations = _load_session_observations(session_id) if session_id else []
+    session_observations = observation_store.list_new_session_observations(session_id, after_id)
     if not session_observations:
-        return  # 本次会话没有观测记录，没什么可提炼的
+        observation_store.release_session(session_id, after_id)
+        return  # 上次处理之后没有新观测，没什么可提炼的
 
-    stat_candidates = detect_patterns(session_observations)
-    summary = _summarize(session_observations)
-    llm_result = _run_llm_analysis(summary)
+    max_id = max(obs["id"] for obs in session_observations)
+    try:
+        stat_candidates = detect_patterns(session_observations)
+        summary = _summarize(session_observations)
+        llm_result = _run_llm_analysis(summary, last_message)
 
-    all_instinct_candidates = stat_candidates + llm_result["instincts"]
-    project_facts = llm_result["project_facts"]
+        all_instinct_candidates = stat_candidates + llm_result["instincts"]
+        project_facts = llm_result["project_facts"]
 
-    today = date.today().isoformat()
+        today = date.today().isoformat()
 
-    hit_ids = _update_hit_instincts(all_instinct_candidates, today)
-    _decay_missed_instincts(hit_ids)
-    _write_project_facts(project_facts, today)
+        _update_hit_instincts(all_instinct_candidates, today)
+        _write_project_facts(project_facts, today)
 
-    storage.regenerate_rules_file(storage.list_instincts(include_deprecated=False))
+        storage.regenerate_rules_file(storage.list_instincts(include_deprecated=False))
+    finally:
+        # 无论本次分析是否抛异常都要推进游标+释放，避免卡在 processing 状态导致
+        # 这个 session 之后每次 Stop 都被当成"仍在处理"而永久跳过。
+        observation_store.release_session(session_id, max_id)
 
 
 if __name__ == "__main__":

@@ -8,8 +8,8 @@
 c-memory/
 ├── .claude/settings.json      # Hook 注册（PostToolUse/Stop/SessionStart）
 ├── hooks/                     # observe.py / extract.py / inject.py
-├── memory_lib/                # providers(llm/embedding) / detectors / confidence / privacy / storage / recall
-├── memory/                    # 数据落盘目录（observations / instincts / memories / rules）
+├── memory_lib/                # providers(llm/embedding) / detectors / confidence / privacy / storage / observation_store / recall
+├── memory/                    # 数据落盘目录（.observations.sqlite3 / instincts / memories / rules）
 ├── tests/
 ├── requirements.txt
 └── README.md
@@ -19,10 +19,15 @@ c-memory/
 
 ## 安装
 
+`memory_lib/vector_cache.py`（给 Ark embedding 结果做本地缓存）依赖 `sqlite-vec`，这是个 SQLite loadable extension，要求 Python 的 `sqlite3` 模块编译时开启了 `enable_load_extension`。**macOS 系统自带的 `/usr/bin/python3` 没有这个能力**，用它建的 venv 装了 `sqlite-vec` 也跑不起来（`AttributeError: 'sqlite3.Connection' object has no attribute 'enable_load_extension'`）。本仓库用 conda（miniforge）提供的 Python 建 venv：
+
 ```bash
-python3 -m venv .venv
+conda create -n c-memory python=3.11 -y
+conda run -n c-memory python3 -m venv --copies .venv   # --copies 保证 venv 不依赖 conda env 常驻
 .venv/bin/pip install -r requirements.txt
 ```
+
+`--copies` 会把解释器整个复制进 `.venv`，装完之后可以正常删掉 `c-memory` 这个 conda env，不影响 `.venv` 使用。如果不想装 conda，任何编译时开启了 `--enable-loadable-sqlite-extensions` 的 Python（比如 Homebrew 的 `python3`）都可以替代第一步。
 
 然后在项目根目录配置 `.env`（可参考同目录下已有的 `.env` 格式）：
 

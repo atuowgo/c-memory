@@ -14,6 +14,10 @@ class EmbeddingProviderError(Exception):
 class EmbeddingProvider(abc.ABC):
     """Embedding Provider 抽象基类。"""
 
+    # 输出维度是否固定/跨调用稳定，决定 recall.py 能不能用 vector_cache 缓存。
+    # TF-IDF 这类"每次现场 fit"的实现必须保持 False。
+    SUPPORTS_CACHE = False
+
     @abc.abstractmethod
     def embed(self, texts: list[str]) -> list[list[float]]:
         """把一批文本转成向量列表，顺序与输入一致。"""
@@ -24,12 +28,14 @@ class ArkProvider(EmbeddingProvider):
     """火山引擎 Ark multimodal embedding。接口格式参考仓库根目录 embedding-demo.txt。"""
 
     TIMEOUT_SECONDS = 5
+    SUPPORTS_CACHE = True
 
     def __init__(self) -> None:
         self.api_key = os.environ.get("ARK_API_KEY", "")
         base_url = os.environ.get("ARK_EMBEDDING_BASE_URL", "").rstrip("/")
         self.base_url = base_url
         self.model = os.environ.get("ARK_EMBEDDING_MODEL", "")
+        self.dim = int(os.environ.get("ARK_EMBEDDING_DIM", "2048"))
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         headers = {

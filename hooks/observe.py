@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-"""PostToolUse Hook: 采集每次工具调用为一条观测记录，写入 observations.jsonl。
+"""PostToolUse Hook: 采集每次工具调用为一条观测记录，写入 observations 表。
 
 输入协议（Claude Code 官方 Hooks 文档，PostToolUse 事件）：
 stdin 接收一段 JSON，字段包括 session_id / transcript_path / cwd /
 hook_event_name（固定 "PostToolUse"）/ tool_name / tool_input / tool_response。
+
+捕获范围对齐得物开源实现（agent-memory-system 的 scripts/observe.py）：保留
+完整 tool_input，以及 tool_response 是字符串时截取前 500 字符（非字符串直接
+丢弃，不做 JSON 序列化，跟得物保持一致）。不再做字段白名单裁剪，靠
+privacy.filter_sensitive 的正则脱敏 + 敏感文件名整条丢弃兜底。
 
 约束：脚本必须永远以 exit code 0 结束，不能阻塞正常工具调用；调试/错误信息一律写 stderr。
 """
@@ -21,12 +26,11 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from memory_lib.privacy import extract_behavioral_signal, filter_sensitive  # noqa: E402
-from memory_lib.storage import (  # noqa: E402
-    append_observation,
-    read_dedup_state,
-    write_dedup_state,
-)
+from memory_lib.observation_store import append_observation  # noqa: E402
+from memory_lib.privacy import filter_sensitive  # noqa: E402
+from memory_lib.storage import read_dedup_state, write_dedup_state  # noqa: E402
+
+TOOL_RESPONSE_SUMMARY_MAX_CHARS = 500
 
 DEDUP_WINDOW_SECONDS = 300
 DEDUP_STATE_TTL_SECONDS = 3600
@@ -51,16 +55,18 @@ def main() -> None:
     session_id = payload.get("session_id")
     tool_name = payload.get("tool_name")
     tool_input = payload.get("tool_input") or {}
-    # tool_response（文件内容/命令输出等）不落盘：detectors 只需要 tool_name +
-    # 路径/命令这类结构信号就能识别行为模式，没有必要、也不应该保留实际内容。
-    signal = extract_behavioral_signal(tool_name, tool_input)
+    tool_response = payload.get("tool_response")
+    tool_response_summary = (
+        tool_response[:TOOL_RESPONSE_SUMMARY_MAX_CHARS] if isinstance(tool_response, str) else None
+    )
 
     now = datetime.now(timezone.utc)
     record = {
         "session_id": session_id,
         "ts": now.isoformat(),
         "tool_name": tool_name,
-        "tool_input": signal,
+        "tool_input": tool_input,
+        "tool_response_summary": tool_response_summary,
     }
     filtered_record = filter_sensitive(record)
 

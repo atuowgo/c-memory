@@ -34,12 +34,52 @@ def build_query(cwd: str) -> str:
     return "\n".join(lines)
 
 
+def _cacheable_text(mem: dict) -> str:
+    return f"{mem.get('body', '')} {' '.join(mem.get('keywords', []))}"
+
+
 def recall_top_k(query: str, memories: list[dict], embedding_provider, k: int = 5) -> list[dict]:
-    """用余弦相似度对 memories 排序，返回原始 memory dict 列表，取前 k 条。"""
+    """对 memories 排序，返回原始 memory dict 列表，取前 k 条。
+
+    embedding_provider.SUPPORTS_CACHE 为真（如 ArkProvider，输出维度固定）时，
+    走 vector_cache：只有新增/内容变更的 memory 才真正调 embed，检索用 sqlite-vec
+    的 SQL 层 KNN。不支持缓存的 provider（如 TfidfProvider，每次现场 fit，向量
+    空间不稳定）退回原来的一次性批量 embed + 手算余弦相似度。
+    """
     if not memories:
         return []
 
-    texts = [f"{mem.get('body', '')} {' '.join(mem.get('keywords', []))}" for mem in memories]
+    if getattr(embedding_provider, "SUPPORTS_CACHE", False):
+        return _recall_top_k_cached(query, memories, embedding_provider, k)
+    return _recall_top_k_batch(query, memories, embedding_provider, k)
+
+
+def _recall_top_k_cached(query: str, memories: list[dict], embedding_provider, k: int) -> list[dict]:
+    from memory_lib.vector_cache import sync_and_search
+
+    try:
+        query_vector = embedding_provider.embed([query])[0]
+    except Exception:
+        logger.exception("recall_top_k 查询向量计算失败")
+        return []
+
+    memory_items = [(mem["id"], _cacheable_text(mem)) for mem in memories if mem.get("id")]
+
+    def embed_one(text: str) -> list[float]:
+        return embedding_provider.embed([text])[0]
+
+    try:
+        ranked_ids = sync_and_search(query_vector, memory_items, embed_one, embedding_provider.dim, k)
+    except Exception:
+        logger.exception("recall_top_k 向量缓存检索失败")
+        return []
+
+    by_id = {mem["id"]: mem for mem in memories}
+    return [by_id[mid] for mid in ranked_ids if mid in by_id]
+
+
+def _recall_top_k_batch(query: str, memories: list[dict], embedding_provider, k: int) -> list[dict]:
+    texts = [_cacheable_text(mem) for mem in memories]
 
     try:
         vectors = embedding_provider.embed([query] + texts)

@@ -20,10 +20,14 @@ venv/
 .pytest_cache/
 
 # 本项目运行时数据（可提交的是 memory/instincts、memory/memories、memory/rules）
-memory/*.jsonl
+memory/.observations.sqlite3
 memory/.dedup_state.json
+memory/.vector_cache.sqlite3
 
 # 系统/编辑器
 .DS_Store
 .idea/
 .vscode/
+
+# MCP 工具本地状态
+.serena/
