@@ -7,4 +7,4 @@ keywords:
 type: project
 ---
 
-项目包含.gitignore、README.md、docs/、hooks/、memory/、memory_lib/、tests/等目录和文件
+项目包含 .gitignore、README.md、docs/、hooks/、memory/、memory_lib/、tests/ 等目录和文件

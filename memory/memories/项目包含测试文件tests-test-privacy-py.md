@@ -2,9 +2,8 @@
 created: '2026-07-27'
 id: 项目包含测试文件tests-test-privacy-py
 keywords:
-- 测试
-- privacy
+- tests
 type: project
 ---
 
-项目包含测试文件tests/test_privacy.py
+项目包含测试目录 tests/

@@ -1,10 +1,10 @@
 ---
-created: '2026-07-27'
+created: '2026-07-28'
 id: 项目路径为-users-doubao-workspace-vibe-c-memory
 keywords:
-- 项目路径
+- docs/notes
 - c-memory
 type: project
 ---
 
-项目路径为/Users/doubao/workspace/vibe/c-memory
+项目文档存储在 /Users/doubao/workspace/vibe/c-memory/docs/notes/ 目录下
