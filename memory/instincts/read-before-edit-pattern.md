@@ -1,16 +1,16 @@
 ---
-confidence: 0.6500000000000001
+confidence: 0.8000000000000003
 deprecated: false
 domain: workflow
-hit_count: 4
+hit_count: 7
 id: read-before-edit-pattern
 last_seen: '2026-07-29'
 scope: personal
-trigger: 编辑文件前
+trigger: 即将编辑一个本次会话尚未 Read 过的文件
 ---
 
 ## Action
-先读取文件内容或使用grep搜索相关代码，确保理解上下文后再修改
+先用 Read 工具读取该文件当前内容，再执行 Edit/Write
 
 ## Evidence
-多次使用rtk read和rtk grep命令查看文件内容后再执行Edit操作
+3/3 次编辑前有先 Read

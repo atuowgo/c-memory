@@ -7,4 +7,4 @@ keywords:
 type: project
 ---
 
-测试命令为 `cd /Users/doubao/workspace/vibe/c-memory && .venv/bin/python -m pytest -q`，测试输出显示通过。
+测试命令为 .venv/bin/python -m pytest -q，表明项目使用 pytest 进行测试
