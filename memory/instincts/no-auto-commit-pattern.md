@@ -1,8 +1,8 @@
 ---
-confidence: 0.5
+confidence: 0.7500000000000002
 deprecated: false
 domain: git
-hit_count: 1
+hit_count: 6
 id: no-auto-commit-pattern
 last_seen: '2026-07-29'
 scope: personal
@@ -13,4 +13,4 @@ trigger: 本次会话执行了多次 Bash 调用但从未 commit/push
 不主动执行 git commit/push，等待用户明确授权
 
 ## Evidence
-本次会话 3 次 Bash 调用中无 commit/push
+本次会话 27 次 Bash 调用中无 commit/push

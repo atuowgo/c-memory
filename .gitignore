@@ -19,10 +19,10 @@ venv/
 # 测试缓存
 .pytest_cache/
 
-# 本项目运行时数据（可提交的是 memory/instincts、memory/memories、memory/rules）
-memory/.observations.sqlite3
+# 本项目运行时数据（可提交的是 memory/instincts、memory/memories、memory/rules、memory/project-summary.md）
+# 用通配符而非逐个列名，避免以后每加一个 SQLite 缓存/状态文件都要手动改这里
+memory/.*.sqlite3
 memory/.dedup_state.json
-memory/.vector_cache.sqlite3
 
 # 系统/编辑器
 .DS_Store

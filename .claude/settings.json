@@ -17,6 +17,30 @@
           {
             "type": "command",
             "command": "${CLAUDE_PROJECT_DIR}/.venv/bin/python3 ${CLAUDE_PROJECT_DIR}/hooks/extract.py"
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.venv/bin/python3 ${CLAUDE_PROJECT_DIR}/hooks/summarize.py"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.venv/bin/python3 ${CLAUDE_PROJECT_DIR}/hooks/summarize.py"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.venv/bin/python3 ${CLAUDE_PROJECT_DIR}/hooks/summarize.py"
           }
         ]
       }
