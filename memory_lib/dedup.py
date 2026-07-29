@@ -1,4 +1,4 @@
-"""轻量语义去重：同一 domain 下用字符级 Jaccard 相似度判断两条 pattern 是否描述同一习惯。
+"""轻量语义去重：同一 domain 下用字符级 Jaccard 相似度判断两条 trigger 是否描述同一习惯。
 
 不引入分词/embedding 依赖 —— 中文短句用单字符集合的 Jaccard 相似度已经够用，
 比逐字比较宽松（能扛住"阅读"vs"读取"这种同义词替换），又不需要额外依赖。
@@ -30,7 +30,7 @@ def _best_char_jaccard_match(text: str, candidates: list[dict], text_key: str) -
     return best
 
 
-def find_similar_instinct(pattern: str, domain: str, candidates: list[dict]) -> dict | None:
+def find_similar_instinct(trigger: str, domain: str, candidates: list[dict]) -> dict | None:
     """在 candidates（同 domain 的已有 instinct）里找相似度最高且 >= 阈值的一条。
 
     domain 不同的一律跳过（domain 是第一道更可靠的门槛，文本相似度只在同 domain 内做细分）；
@@ -40,10 +40,10 @@ def find_similar_instinct(pattern: str, domain: str, candidates: list[dict]) -> 
         cand for cand in candidates
         if domain and cand.get("domain") and domain == cand.get("domain")
     ]
-    return _best_char_jaccard_match(pattern, same_domain, "pattern")
+    return _best_char_jaccard_match(trigger, same_domain, "trigger")
 
 
-def find_similar_memory(fact: str, keywords: list[str], candidates: list[dict]) -> dict | None:
+def find_similar_memory(description: str, keywords: list[str], candidates: list[dict]) -> dict | None:
     """在 candidates（已有 project fact）里找相似度最高且 >= 阈值的一条。
 
     project_facts 没有 domain 字段，退而用 keywords 交集做分组门槛（至少共享一个关键词
@@ -57,4 +57,4 @@ def find_similar_memory(fact: str, keywords: list[str], candidates: list[dict]) 
         cand for cand in candidates
         if own_keywords & {kw.strip().lower() for kw in (cand.get("keywords") or []) if kw and kw.strip()}
     ]
-    return _best_char_jaccard_match(fact, gated, "body")
+    return _best_char_jaccard_match(description, gated, "description")

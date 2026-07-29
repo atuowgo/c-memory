@@ -9,7 +9,7 @@ def _domains(candidates: list[dict]) -> set[str]:
 
 
 # ---------------------------------------------------------------------------
-# file-editing 检测器
+# workflow 检测器（read-before-edit）
 # ---------------------------------------------------------------------------
 
 
@@ -21,7 +21,7 @@ def test_edit_before_read_detected_with_sufficient_coverage():
         {"ts": "4", "tool_name": "Write", "tool_input": {"file_path": "b.py"}},
     ]
     candidates = detect_patterns(observations)
-    assert "file-editing" in _domains(candidates)
+    assert "workflow" in _domains(candidates)
 
 
 def test_edit_before_read_not_detected_with_single_sample():
@@ -31,7 +31,7 @@ def test_edit_before_read_not_detected_with_single_sample():
         {"ts": "2", "tool_name": "Edit", "tool_input": {"file_path": "a.py"}},
     ]
     candidates = detect_patterns(observations)
-    assert "file-editing" not in _domains(candidates)
+    assert "workflow" not in _domains(candidates)
 
 
 def test_edit_before_read_not_detected_when_never_read_first():
@@ -41,11 +41,11 @@ def test_edit_before_read_not_detected_when_never_read_first():
         {"ts": "3", "tool_name": "Edit", "tool_input": {"file_path": "c.py"}},
     ]
     candidates = detect_patterns(observations)
-    assert "file-editing" not in _domains(candidates)
+    assert "workflow" not in _domains(candidates)
 
 
 # ---------------------------------------------------------------------------
-# git-workflow 检测器
+# git 检测器（no-auto-commit）
 # ---------------------------------------------------------------------------
 
 
@@ -56,7 +56,7 @@ def test_git_workflow_detected_with_enough_bash_calls_and_no_commit():
         {"ts": "3", "tool_name": "Bash", "tool_input": {"command": "echo hi"}},
     ]
     candidates = detect_patterns(observations)
-    assert "git-workflow" in _domains(candidates)
+    assert "git" in _domains(candidates)
 
 
 def test_git_workflow_not_detected_when_commit_present():
@@ -68,7 +68,7 @@ def test_git_workflow_not_detected_when_commit_present():
         {"ts": "5", "tool_name": "Bash", "tool_input": {"command": "echo bye"}},
     ]
     candidates = detect_patterns(observations)
-    assert "git-workflow" not in _domains(candidates)
+    assert "git" not in _domains(candidates)
 
 
 def test_git_workflow_not_detected_with_too_few_bash_calls():
@@ -77,7 +77,7 @@ def test_git_workflow_not_detected_with_too_few_bash_calls():
         {"ts": "2", "tool_name": "Bash", "tool_input": {"command": "echo hi"}},
     ]
     candidates = detect_patterns(observations)
-    assert "git-workflow" not in _domains(candidates)
+    assert "git" not in _domains(candidates)
 
 
 # ---------------------------------------------------------------------------
@@ -117,7 +117,7 @@ def test_detect_patterns_one_broken_detector_does_not_block_the_other():
         {"ts": "4", "tool_name": "Bash", "tool_input": {"command": "echo hi"}},
     ]
     candidates = detect_patterns(observations)
-    assert "git-workflow" in _domains(candidates)
+    assert "git" in _domains(candidates)
 
 
 def test_detect_patterns_empty_input_returns_empty_list():

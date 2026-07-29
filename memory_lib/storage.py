@@ -143,9 +143,9 @@ def regenerate_rules_file(instincts: list[dict]) -> None:
         "",
     ]
     for inst in candidates:
-        pattern = inst.get("pattern", inst.get("id", ""))
+        trigger = inst.get("trigger", inst.get("id", ""))
         confidence = inst.get("confidence", 0)
         domain = inst.get("domain", "")
-        lines.append(f"- **{pattern}** (confidence: {confidence:.2f}, domain: {domain})")
+        lines.append(f"- **{trigger}** (confidence: {confidence:.2f}, domain: {domain})")
 
     RULES_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")

@@ -1,8 +1,10 @@
 """统计路径检测器：从会话内 observation 序列里挖掘候选行为模式。
 
 输出格式与 `memory_lib.providers.llm.LLMProvider.analyze()` 返回的
-`instincts` 列表项格式一致：{"pattern": str, "domain": str, "evidence": str}，
-方便 extract.py 把两条路径的候选结果合并处理。
+`instincts` 列表项格式一致（对齐得物 analyze_instincts.py 的字段结构）：
+{"id": str, "trigger": str, "action": str, "domain": str, "evidence": str}，
+方便 extract.py 把两条路径的候选结果合并处理。id 直接用固定字符串（跟得物
+自己的统计检测器一样，同一个检测器每次产出同一个 id，天然幂等去重）。
 """
 from __future__ import annotations
 
@@ -48,8 +50,10 @@ def _edit_before_read_detector(observations: list[dict]) -> list[dict]:
 
     return [
         {
-            "pattern": "编辑文件前先 Read 该文件",
-            "domain": "file-editing",
+            "id": "read-before-edit-pattern",
+            "trigger": "即将编辑一个本次会话尚未 Read 过的文件",
+            "action": "先用 Read 工具读取该文件当前内容，再执行 Edit/Write",
+            "domain": "workflow",
             "evidence": f"{hit}/{total} 次编辑前有先 Read",
         }
     ]
@@ -73,8 +77,10 @@ def _avoid_auto_commit_detector(observations: list[dict]) -> list[dict]:
 
     return [
         {
-            "pattern": "不主动执行 git commit/push",
-            "domain": "git-workflow",
+            "id": "no-auto-commit-pattern",
+            "trigger": "本次会话执行了多次 Bash 调用但从未 commit/push",
+            "action": "不主动执行 git commit/push，等待用户明确授权",
+            "domain": "git",
             "evidence": f"本次会话 {total_bash} 次 Bash 调用中无 commit/push",
         }
     ]

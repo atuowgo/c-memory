@@ -26,13 +26,13 @@ def isolated_memory_dir(monkeypatch):
 
 def test_list_promoted_instincts_filters_by_confidence_and_deprecated(isolated_memory_dir):
     storage.write_instinct(
-        "high-confidence", {"domain": "d", "pattern": "p1", "confidence": 0.8, "deprecated": False}, "evidence"
+        "high-confidence", {"domain": "d", "trigger": "p1", "confidence": 0.8, "deprecated": False}, "evidence"
     )
     storage.write_instinct(
-        "low-confidence", {"domain": "d", "pattern": "p2", "confidence": 0.5, "deprecated": False}, "evidence"
+        "low-confidence", {"domain": "d", "trigger": "p2", "confidence": 0.5, "deprecated": False}, "evidence"
     )
     storage.write_instinct(
-        "deprecated-high", {"domain": "d", "pattern": "p3", "confidence": 0.9, "deprecated": True}, "evidence"
+        "deprecated-high", {"domain": "d", "trigger": "p3", "confidence": 0.9, "deprecated": True}, "evidence"
     )
 
     promoted = storage.list_promoted_instincts()
@@ -41,8 +41,8 @@ def test_list_promoted_instincts_filters_by_confidence_and_deprecated(isolated_m
 
 
 def test_list_promoted_instincts_sorted_by_confidence_desc(isolated_memory_dir):
-    storage.write_instinct("a", {"domain": "d", "pattern": "p", "confidence": 0.75, "deprecated": False}, "e")
-    storage.write_instinct("b", {"domain": "d", "pattern": "p", "confidence": 0.9, "deprecated": False}, "e")
+    storage.write_instinct("a", {"domain": "d", "trigger": "p", "confidence": 0.75, "deprecated": False}, "e")
+    storage.write_instinct("b", {"domain": "d", "trigger": "p", "confidence": 0.9, "deprecated": False}, "e")
 
     promoted = storage.list_promoted_instincts()
 
@@ -50,6 +50,6 @@ def test_list_promoted_instincts_sorted_by_confidence_desc(isolated_memory_dir):
 
 
 def test_list_promoted_instincts_empty_when_none_qualify(isolated_memory_dir):
-    storage.write_instinct("a", {"domain": "d", "pattern": "p", "confidence": 0.3, "deprecated": False}, "e")
+    storage.write_instinct("a", {"domain": "d", "trigger": "p", "confidence": 0.3, "deprecated": False}, "e")
 
     assert storage.list_promoted_instincts() == []

@@ -36,12 +36,28 @@ _SUMMARY_EXAMPLES_PER_TOOL = 3
 
 
 def _slugify(text: str) -> str:
-    """把 pattern/fact 文本转成稳定、可读的文件名 id：非字母数字(含中文)替换成 '-'。"""
+    """把 trigger/description 文本转成稳定、可读的文件名 id：非字母数字(含中文)替换成 '-'。
+
+    仅作兜底：正常路径下 id/name 由 LLM 按提示词要求直接生成英文 kebab-case
+    （对齐得物 analyze_instincts.py / extract_memories.py 的 prompt 约定），
+    这里只在 LLM 没给 id、或给出的 id 不是合法 kebab-case 时才用来兜底生成。
+    """
     slug = re.sub(r"[^0-9a-zA-Z一-鿿]+", "-", (text or "").strip())
     slug = slug.strip("-").lower()
     if not slug:
         slug = hashlib.md5((text or "").encode("utf-8")).hexdigest()[:8]
     return slug[:80]
+
+
+_KEBAB_ID_PATTERN = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
+
+
+def _sanitize_id(raw_id: str | None, fallback_text: str) -> str:
+    """校验 LLM/检测器给出的 id 是否为合法英文 kebab-case，不合法则退化为本地 slugify。"""
+    candidate = (raw_id or "").strip().lower()
+    if _KEBAB_ID_PATTERN.match(candidate):
+        return candidate[:80]
+    return _slugify(fallback_text)
 
 
 def _summarize(observations: list[dict]) -> str:
@@ -93,29 +109,32 @@ def _update_hit_instincts(candidates: list[dict], today: str) -> set[str]:
 
     同一 domain 下先尝试用 char_jaccard 找语义相似的已有 instinct 合并命中，
     避免 LLM 每次措辞不同（"编辑前先阅读"/"编辑前先读取"）把同一习惯拆成多条、
-    永远凑不够置信度晋升阈值。找不到相似的才退化为按 pattern 精确 slug 匹配/新建。
+    永远凑不够置信度晋升阈值。找不到相似的才使用候选自带的 id（LLM/检测器直接
+    产出的英文 kebab-case，见 _sanitize_id），id 不合法时才退化为本地 slugify。
     """
     hit_ids: set[str] = set()
     known_instincts = storage.list_instincts(include_deprecated=True)
 
     for cand in candidates:
-        pattern = (cand.get("pattern") or "").strip()
-        if not pattern:
+        trigger = (cand.get("trigger") or "").strip()
+        if not trigger:
             continue
         domain = cand.get("domain", "")
+        action = (cand.get("action") or "").strip()
+        evidence = (cand.get("evidence") or "").strip()
 
-        similar = find_similar_instinct(pattern, domain, known_instincts)
+        similar = find_similar_instinct(trigger, domain, known_instincts)
         if similar is not None:
             instinct_id = similar["id"]
             existing = similar
         else:
-            instinct_id = _slugify(pattern)
+            instinct_id = _sanitize_id(cand.get("id"), trigger)
             existing = storage.read_instinct(instinct_id)
 
         if existing is None:
             frontmatter_dict = {
-                "domain": cand.get("domain", ""),
-                "pattern": pattern,
+                "domain": domain,
+                "trigger": trigger,
                 "confidence": INITIAL_CONFIDENCE,
                 "hit_count": 1,
                 "deprecated": False,
@@ -125,8 +144,8 @@ def _update_hit_instincts(candidates: list[dict], today: str) -> set[str]:
         else:
             frontmatter_dict = dict(existing)
             frontmatter_dict.pop("body", None)
-            frontmatter_dict["domain"] = cand.get("domain", existing.get("domain", ""))
-            frontmatter_dict["pattern"] = pattern
+            frontmatter_dict["domain"] = domain or existing.get("domain", "")
+            frontmatter_dict["trigger"] = trigger
             frontmatter_dict["confidence"] = update_confidence(
                 existing.get("confidence", INITIAL_CONFIDENCE), hit=True
             )
@@ -134,7 +153,7 @@ def _update_hit_instincts(candidates: list[dict], today: str) -> set[str]:
             frontmatter_dict["deprecated"] = False
             frontmatter_dict["last_seen"] = today
 
-        body = cand.get("evidence") or pattern
+        body = f"## Action\n{action}\n\n## Evidence\n{evidence}" if (action or evidence) else trigger
         storage.write_instinct(instinct_id, frontmatter_dict, body)
         hit_ids.add(instinct_id)
 
@@ -150,28 +169,38 @@ def _write_project_facts(facts: list[dict], today: str) -> None:
 
     project_facts 没有 domain 字段，find_similar_memory 改用 keywords 交集做分组门槛，
     命中的话覆盖已有 memory_id（文本更新为最新措辞），逻辑与 instincts 的语义去重对称。
+    找不到相似的才使用候选自带的 name（LLM 直接产出的英文 kebab-case），不合法时退化为
+    本地 slugify。
     """
     known_memories = storage.list_memories()
 
     for fact in facts:
-        fact_text = (fact.get("fact") or "").strip()
-        if not fact_text:
+        description = (fact.get("description") or "").strip()
+        if not description:
             continue
+        body = (fact.get("body") or "").strip() or description
         keywords = fact.get("keywords", [])
         fact_type = fact.get("type") or "project"
 
-        similar = find_similar_memory(fact_text, keywords, known_memories)
-        memory_id = similar["id"] if similar is not None else _slugify(fact_text)
+        similar = find_similar_memory(description, keywords, known_memories)
+        memory_id = similar["id"] if similar is not None else _sanitize_id(fact.get("name"), description)
 
         storage.write_memory(
             memory_id,
-            {"type": fact_type, "keywords": keywords, "created": today},
-            fact_text,
+            {"type": fact_type, "keywords": keywords, "description": description, "created": today},
+            body,
         )
 
         known_memories = [m for m in known_memories if m.get("id") != memory_id]
         known_memories.append(
-            {"id": memory_id, "keywords": keywords, "body": fact_text, "type": fact_type, "created": today}
+            {
+                "id": memory_id,
+                "keywords": keywords,
+                "description": description,
+                "body": body,
+                "type": fact_type,
+                "created": today,
+            }
         )
 
 

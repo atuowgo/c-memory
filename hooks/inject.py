@@ -41,7 +41,8 @@ def _format_memories(top_memories: list[dict]) -> str:
     lines = []
     for mem in top_memories:
         label = _TYPE_LABELS.get(mem.get("type"), "[user]")
-        lines.append(f"{label} {mem.get('body', '').strip()}")
+        text = mem.get("description") or mem.get("body", "")
+        lines.append(f"{label} {text.strip()}")
     return "\n".join(lines)
 
 
@@ -49,8 +50,8 @@ def _format_instincts(instincts: list[dict]) -> str:
     lines = []
     for inst in instincts:
         domain = inst.get("domain", "")
-        pattern = inst.get("pattern", "")
-        lines.append(f"[habit][{domain}] {pattern}")
+        trigger = inst.get("trigger", "")
+        lines.append(f"[habit][{domain}] {trigger}")
     return "\n".join(lines)
 
 

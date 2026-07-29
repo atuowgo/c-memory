@@ -22,27 +22,39 @@ class LLMProvider(abc.ABC):
         raise NotImplementedError
 
 
-# 提示词内容对齐得物开源实现（agent-memory-system 的 analyze_instincts.py / extract_memories.py）：
-# instincts 的 domain 固定枚举、project_facts 的排除清单与 type 枚举都来自那两份 prompt。
+# 提示词字段结构完全对齐得物开源实现（agent-memory-system 的 analyze_instincts.py 的
+# LLM_ANALYSIS_PROMPT / extract_memories.py 的 EXTRACT_PROMPT，2026-07-28 curl 拉取源码核实）：
+# - instincts 用 id(LLM 直接生成的英文 kebab-case) + trigger + action + domain + evidence
+# - project_facts 用 name(同上) + description + body + type
+# id/name 均由 LLM 直接产出，不再走本地对中文文本 slugify——这样文件名/id 才会和得物一样是英文。
+# 唯一未对齐之处：project_facts 额外要求 keywords 字段，这是我们自己为语义去重
+# （find_similar_memory 用 keywords 交集做分组门槛）加的，得物原版 schema 没有这个字段。
 _SYSTEM_PROMPT = """你是一个行为模式与记忆提取专家。给你一段本次会话的操作观测摘要，
 可能还附带最后一轮 assistant 回复，请分析其中反映出的：
 
-1. 行为习惯模式（instincts），例如"编辑文件前先阅读该文件"：
-   - pattern：具体的触发场景+行为描述
+1. 行为习惯模式（instincts）：
+   - id：kebab-case 英文唯一标识，如 read-before-edit-pattern
+   - trigger：触发场景描述
+   - action：推荐的行为描述
    - domain：只能是 workflow / testing / git / code-style / project-context 之一
+   - evidence：支持证据
 
 2. 值得长期记住的记忆（project_facts）：
    提取标准——项目级信息（技术栈/目录结构/配置方式）、用户偏好/反馈、踩过的坑/错误修复方法、工作流约束（部署流程/分支策略）。
    不要提取：一次性的临时操作、过于细节的代码变更、显而易见的通用知识。
-   type：project（项目事实）/ feedback（用户偏好反馈）/ error（踩坑记录）/ workflow（工作流约束）之一
+   - name：kebab-case 英文唯一标识，如 uses-pnpm
+   - description：一句话描述这条记忆的核心内容
+   - body：详细说明，包括 why 和 how
+   - type：project（项目事实）/ feedback（用户偏好反馈）/ error（踩坑记录）/ workflow（工作流约束）之一
+   - keywords：1-3 个用于去重分组的关键词
 
 严格按以下 JSON 格式输出，不要输出任何其他文字：
 {
   "instincts": [
-    {"pattern": "行为模式描述", "domain": "workflow", "evidence": "支持证据"}
+    {"id": "read-before-edit-pattern", "trigger": "触发场景描述", "action": "推荐的行为描述", "domain": "workflow", "evidence": "支持证据"}
   ],
   "project_facts": [
-    {"fact": "事实描述", "type": "project", "keywords": ["关键词1", "关键词2"]}
+    {"name": "uses-pnpm", "description": "一句话描述", "body": "详细说明", "type": "project", "keywords": ["pnpm"]}
   ]
 }
 
@@ -118,7 +130,9 @@ class NullProvider(LLMProvider):
             if pattern.search(text):
                 project_facts.append(
                     {
-                        "fact": f"项目使用 {manager}",
+                        "name": f"uses-{manager}",
+                        "description": f"项目使用 {manager}",
+                        "body": f"项目使用 {manager} 作为包管理器",
                         "type": "project",
                         "keywords": [manager],
                     }
