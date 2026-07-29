@@ -1,0 +1,781 @@
+<title>c-memory 机制全览</title>
+<style>
+  :root {
+    --bg: #f2efe6;
+    --surface: #ffffff;
+    --surface-2: #ece8dc;
+    --border: #ddd6c4;
+    --text: #23262c;
+    --text-dim: #5c6068;
+    --accent: #a86c1f;
+    --accent-soft: rgba(168, 108, 31, 0.12);
+    --layer-obs: #5b6b7a;
+    --layer-instinct: #a86c1f;
+    --layer-memory: #3f7d6c;
+    --layer-rule: #ad7f0a;
+    --layer-recap: #6d4fa0;
+    --good: #3f7d4f;
+    --bad: #a3402b;
+    --code-bg: #ece8dc;
+    --shadow: 0 1px 2px rgba(20, 20, 15, 0.06), 0 8px 24px rgba(20, 20, 15, 0.05);
+  }
+  :root[data-theme="dark"] {
+    --bg: #12161a;
+    --surface: #1a1f26;
+    --surface-2: #20262e;
+    --border: #2c333c;
+    --text: #e8e6df;
+    --text-dim: #9aa1ab;
+    --accent: #d69a45;
+    --accent-soft: rgba(214, 154, 69, 0.14);
+    --layer-obs: #8b98a8;
+    --layer-instinct: #d69a45;
+    --layer-memory: #5fb39d;
+    --layer-rule: #e0b23a;
+    --layer-recap: #a98ce0;
+    --good: #6bbf85;
+    --bad: #d97b63;
+    --code-bg: #161b21;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.35);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #12161a;
+      --surface: #1a1f26;
+      --surface-2: #20262e;
+      --border: #2c333c;
+      --text: #e8e6df;
+      --text-dim: #9aa1ab;
+      --accent: #d69a45;
+      --accent-soft: rgba(214, 154, 69, 0.14);
+      --layer-obs: #8b98a8;
+      --layer-instinct: #d69a45;
+      --layer-memory: #5fb39d;
+      --layer-rule: #e0b23a;
+      --layer-recap: #a98ce0;
+      --good: #6bbf85;
+      --bad: #d97b63;
+      --code-bg: #161b21;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.35);
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    line-height: 1.65;
+    font-size: 16px;
+  }
+  h1, h2, h3 {
+    font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Songti SC", serif;
+    font-weight: 600;
+    text-wrap: balance;
+    color: var(--text);
+  }
+  code, .mono {
+    font-family: "SF Mono", ui-monospace, Menlo, Consolas, "Courier New", monospace;
+    font-variant-numeric: tabular-nums;
+  }
+  code {
+    background: var(--code-bg);
+    padding: 0.1em 0.4em;
+    border-radius: 4px;
+    font-size: 0.88em;
+    border: 1px solid var(--border);
+  }
+  a { color: var(--accent); }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .layout {
+    display: grid;
+    grid-template-columns: 250px minmax(0, 1fr);
+    max-width: 1180px;
+    margin: 0 auto;
+    gap: 0;
+  }
+  nav.toc {
+    position: sticky;
+    top: 0;
+    align-self: start;
+    height: 100vh;
+    overflow-y: auto;
+    padding: 32px 20px 32px 28px;
+    border-right: 1px solid var(--border);
+  }
+  nav.toc .brand {
+    font-family: "Iowan Old Style", Georgia, serif;
+    font-size: 1.05rem;
+    font-weight: 600;
+    margin-bottom: 4px;
+  }
+  nav.toc .brand-sub {
+    font-size: 0.78rem;
+    color: var(--text-dim);
+    margin-bottom: 24px;
+  }
+  nav.toc ol {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    counter-reset: toc;
+  }
+  nav.toc li { margin-bottom: 2px; }
+  nav.toc a {
+    counter-increment: toc;
+    display: block;
+    padding: 6px 10px;
+    border-radius: 6px;
+    color: var(--text-dim);
+    text-decoration: none;
+    font-size: 0.86rem;
+    border-left: 2px solid transparent;
+  }
+  nav.toc a::before {
+    content: counter(toc, decimal-leading-zero) "  ";
+    font-family: "SF Mono", monospace;
+    color: var(--accent);
+    font-size: 0.78rem;
+  }
+  nav.toc a:hover { background: var(--accent-soft); color: var(--text); }
+
+  main { padding: 40px clamp(20px, 4vw, 56px) 120px; min-width: 0; }
+
+  .hero { margin-bottom: 40px; }
+  .hero h1 { font-size: clamp(1.8rem, 3vw, 2.3rem); margin: 0 0 12px; }
+  .hero p.lede { font-size: 1.06rem; color: var(--text-dim); max-width: 66ch; margin: 0 0 24px; }
+
+  .stat-strip {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .stat {
+    background: var(--surface);
+    padding: 14px 16px;
+  }
+  .stat .n { font-family: "SF Mono", monospace; font-size: 1.5rem; font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; }
+  .stat .l { font-size: 0.74rem; color: var(--text-dim); margin-top: 2px; }
+
+  section { margin: 64px 0; scroll-margin-top: 24px; }
+  section h2 {
+    font-size: 1.5rem;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 12px;
+    margin-bottom: 20px;
+  }
+  section h2 .num { font-family: "SF Mono", monospace; color: var(--accent); font-size: 1rem; }
+  section h3 { font-size: 1.12rem; margin: 28px 0 10px; }
+  .purpose {
+    font-size: 0.92rem;
+    color: var(--text-dim);
+    background: var(--accent-soft);
+    border-left: 3px solid var(--accent);
+    padding: 10px 14px;
+    border-radius: 0 6px 6px 0;
+    margin: 0 0 16px;
+  }
+
+  p { max-width: 74ch; }
+
+  .diagram-wrap {
+    overflow-x: auto;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    margin: 16px 0;
+    box-shadow: var(--shadow);
+  }
+  pre.mermaid { margin: 0; }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+    margin: 16px 0;
+  }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; }
+  th, td {
+    text-align: left;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th {
+    background: var(--surface-2);
+    font-weight: 600;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-dim);
+  }
+  tr:last-child td { border-bottom: none; }
+  td code { white-space: nowrap; }
+
+  .pill {
+    display: inline-block;
+    font-size: 0.72rem;
+    font-family: "SF Mono", monospace;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-weight: 600;
+  }
+  .pill.obs { background: color-mix(in srgb, var(--layer-obs) 20%, transparent); color: var(--layer-obs); }
+  .pill.instinct { background: color-mix(in srgb, var(--layer-instinct) 20%, transparent); color: var(--layer-instinct); }
+  .pill.memory { background: color-mix(in srgb, var(--layer-memory) 20%, transparent); color: var(--layer-memory); }
+  .pill.rule { background: color-mix(in srgb, var(--layer-rule) 20%, transparent); color: var(--layer-rule); }
+  .pill.recap { background: color-mix(in srgb, var(--layer-recap) 20%, transparent); color: var(--layer-recap); }
+  .pill.good { background: color-mix(in srgb, var(--good) 20%, transparent); color: var(--good); }
+  .pill.bad { background: color-mix(in srgb, var(--bad) 20%, transparent); color: var(--bad); }
+
+  .card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin: 16px 0; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px 18px;
+    box-shadow: var(--shadow);
+  }
+  .card h4 { margin: 0 0 8px; font-size: 0.95rem; font-family: inherit; font-weight: 600; }
+  .card p { margin: 0; font-size: 0.87rem; color: var(--text-dim); }
+
+  .confbar-row { display: flex; align-items: center; gap: 10px; margin: 8px 0; font-size: 0.86rem; }
+  .confbar-track { flex: 1; height: 8px; background: var(--surface-2); border-radius: 4px; overflow: hidden; border: 1px solid var(--border); }
+  .confbar-fill { height: 100%; background: linear-gradient(90deg, var(--layer-instinct), var(--layer-rule)); }
+  .confbar-label { width: 220px; color: var(--text-dim); flex-shrink: 0; }
+  .confbar-val { width: 40px; text-align: right; font-family: "SF Mono", monospace; flex-shrink: 0; }
+
+  .example-file {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-family: "SF Mono", monospace;
+    font-size: 0.8rem;
+    white-space: pre-wrap;
+    overflow-x: auto;
+    margin: 10px 0;
+  }
+  .example-file .k { color: var(--accent); }
+
+  .callout {
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--bad);
+    background: color-mix(in srgb, var(--bad) 8%, var(--surface));
+    border-radius: 0 8px 8px 0;
+    padding: 12px 16px;
+    margin: 14px 0;
+    font-size: 0.9rem;
+  }
+  .callout.open { border-left-color: var(--layer-instinct); background: color-mix(in srgb, var(--layer-instinct) 8%, var(--surface)); }
+  .callout.win { border-left-color: var(--good); background: color-mix(in srgb, var(--good) 8%, var(--surface)); }
+  .callout.recap { border-left-color: var(--layer-recap); background: color-mix(in srgb, var(--layer-recap) 8%, var(--surface)); }
+  .callout strong { display: block; margin-bottom: 4px; }
+
+  footer {
+    max-width: 74ch;
+    color: var(--text-dim);
+    font-size: 0.82rem;
+    border-top: 1px solid var(--border);
+    margin-top: 60px;
+    padding-top: 20px;
+  }
+
+  @media (max-width: 860px) {
+    .layout { grid-template-columns: 1fr; }
+    nav.toc {
+      position: relative;
+      height: auto;
+      border-right: none;
+      border-bottom: 1px solid var(--border);
+      padding: 20px;
+    }
+    nav.toc ol { display: flex; flex-wrap: wrap; gap: 4px; }
+    nav.toc li { margin: 0; }
+  }
+</style>
+
+<div class="layout">
+  <nav class="toc" aria-label="目录">
+    <div class="brand">c-memory</div>
+    <div class="brand-sub">机制全览 · 2026-07-29</div>
+    <ol>
+      <li><a href="#overview">总体架构</a></li>
+      <li><a href="#observe">观察 · observe.py</a></li>
+      <li><a href="#extract">提炼 · extract.py</a></li>
+      <li><a href="#inject">注入 · inject.py</a></li>
+      <li><a href="#recap">情景记忆 · project-summary.md</a></li>
+      <li><a href="#taxonomy">记忆分层与来源</a></li>
+      <li><a href="#storage">存储层：文件 vs SQLite</a></li>
+      <li><a href="#confidence">置信度演化</a></li>
+      <li><a href="#providers">Provider 降级矩阵</a></li>
+      <li><a href="#privacy">隐私过滤</a></li>
+      <li><a href="#open">已知问题 / 待定项</a></li>
+      <li><a href="#tests">测试与验证</a></li>
+    </ol>
+  </nav>
+
+  <main>
+    <div class="hero">
+      <h1>c-memory：Claude Code 的个人记忆闭环</h1>
+      <p class="lede">
+        两条独立管线并行运行：<strong>语义/程序性记忆闭环</strong>（观察 → 提炼 → 注入，把工具调用沉淀成带置信度的
+        行为习惯与项目事实）和<strong>情景记忆滚动总结</strong>（把对话本身滚动总结成"上次聊到哪了"，解决重开会话丢上下文的问题）。
+        全程个人单机运行，无需人工整理。以下是当前真实代码状态的完整机制说明，非规划稿。
+      </p>
+      <div class="stat-strip">
+        <div class="stat"><div class="n">26</div><div class="l">活跃 instincts</div></div>
+        <div class="stat"><div class="n">34</div><div class="l">project memories</div></div>
+        <div class="stat"><div class="n">1</div><div class="l">已晋升规则</div></div>
+        <div class="stat"><div class="n">5</div><div class="l">Hook（PostToolUse/Stop×2/PreCompact/SessionEnd/SessionStart）</div></div>
+        <div class="stat"><div class="n">77</div><div class="l">单测全绿</div></div>
+      </div>
+    </div>
+
+    <section id="overview">
+      <h2><span class="num">01</span> 总体架构</h2>
+      <p class="purpose">阅读目的：理解两条管线各自的输入输出边界，以及它们为什么共用 Stop/SessionStart 钩子入口却互不干扰。</p>
+
+      <h3>管线 A：语义 / 程序性记忆闭环</h3>
+      <div class="diagram-wrap">
+        <pre class="mermaid">
+flowchart TD
+    ToolCall["工具调用 (Edit/Bash/Read/...)"]
+    PostHook["PostToolUse: observe.py"]
+    Privacy["filter_sensitive() 正则脱敏 + 敏感文件整条丢内容"]
+    Dedup{"5分钟内同(tool_name,input_digest)已记录?"}
+    DedupState[(".dedup_state.json")]
+    ObsDB[("SQLite: .observations.sqlite3<br/>observations 表")]
+
+    ToolCall --> PostHook --> Privacy --> Dedup
+    Dedup -- 是,跳过 --> ToolCall
+    Dedup -- 否 --> ObsDB
+    Dedup -. 查询/更新 .-> DedupState
+
+    StopHook["Stop Hook: extract.py<br/>(每次 assistant 回复结束都触发)"]
+    Claim{"try_claim_session()<br/>该 session 有处理在跑且未超时(600s)?"}
+    Skip["跳过本次，不等待<br/>(允许丢一次，模式会反复触发)"]
+    ObsDB -. "list_new_session_observations(after_id)" .-> StopHook
+    StopHook --> Claim
+    Claim -- 是 --> Skip
+    Claim -- 否 --> NewObs{"增量记录非空?"}
+    NewObs -- 否 --> Release1["release_session(原游标)"]
+    NewObs -- 是 --> Detect["detectors.py 统计检测器<br/>(domain 收窄为固定枚举)"]
+    NewObs -- 是 --> LLMCheck{"DEEPSEEK_API_KEY 已配置?"}
+    LLMCheck -- 是 --> LLMAnalyze["DeepSeekProvider.analyze(summary, last_message)"]
+    LLMCheck -- 否/异常 --> NullLLM["NullProvider 关键词规则兜底"]
+
+    Detect --> Candidates["instinct 候选<br/>{id,trigger,action,domain,evidence}"]
+    LLMAnalyze --> Candidates
+    LLMAnalyze --> Facts["project_facts 候选<br/>{name,description,body,type,keywords}"]
+    NullLLM --> Facts
+    NullLLM --> Candidates
+
+    Candidates --> InstinctDedup["find_similar_instinct()<br/>同domain + char_jaccard≥0.45"]
+    InstinctDedup --> InstinctWrite[("instincts/*.md<br/>id 由 LLM 直接生成英文kebab-case<br/>命中+0.05上限0.9")]
+    Facts --> MemoryDedup["find_similar_memory()<br/>keywords交集 + char_jaccard≥0.45"]
+    MemoryDedup --> MemoryWrite[("memories/*.md")]
+
+    InstinctWrite --> Regen["regenerate_rules_file()<br/>confidence≥0.7 且未deprecated, 上限30条"]
+    Regen --> RulesFile[("rules/auto-evolved.md")]
+    RulesFile --> Release2["release_session(max_id)"]
+    MemoryWrite --> Release2
+
+    SessionStart["SessionStart: inject.py"]
+    Release1 -.-> SessionStart
+    Release2 -.-> SessionStart
+    ListPromoted["storage.list_promoted_instincts()"]
+    Recall["memories 向量召回 Top-5"]
+    SessionStart --> ListPromoted --> FormatOut["[habit][domain] trigger"]
+    SessionStart --> Recall --> FormatMem["[project]/[feedback]/[error]/[workflow] description"]
+    FormatOut --> StdoutInject["print() → stdout → 自动注入上下文"]
+    FormatMem --> StdoutInject
+    StdoutInject --> ToolCall
+        </pre>
+      </div>
+
+      <h3>管线 B：情景记忆滚动总结（新增）</h3>
+      <div class="diagram-wrap">
+        <pre class="mermaid">
+flowchart TD
+    Transcript["~/.claude/projects/.../{session_id}.jsonl<br/>(Claude Code 自身写入)"]
+
+    StopEvt{"Stop Hook<br/>(每轮触发)"} --> SummarizePy["summarize.py"]
+    PreCompactEvt{"PreCompact Hook<br/>(压缩前触发)"} --> SummarizePy
+    SessionEndEvt{"SessionEnd Hook<br/>(正常终止触发，不保证覆盖crash/kill)"} --> SummarizePy
+
+    SummarizePy --> ClaimT["transcript_store.try_claim_session()<br/>返回(claimed, cursor)元组"]
+    ClaimT -- "claimed=False" --> SkipT["跳过本次"]
+    ClaimT -- "claimed=True" --> ParseT["transcript.parse_new_turns(transcript_path, cursor)<br/>过滤真实用户/assistant文本轮次"]
+
+    ParseT -- "空" --> ReleaseNoop["release_session(cursor不变)"]
+    ParseT -- "非空" --> CountCheck{"force(PreCompact/SessionEnd)<br/>或 轮次数≥_TURN_THRESHOLD(100)?"}
+    CountCheck -- "否" --> Hold["不release，留到下次累积"]
+    CountCheck -- "是" --> LLMSummarize["LLMProvider.summarize_conversation(\n previous_summary, new_turns_text)"]
+    LLMSummarize -- "成功" --> WriteOK["覆盖写 project-summary.md<br/>release_session(最新uuid)"]
+    LLMSummarize -- "失败" --> WriteFail["release_session(cursor回退到本批开始前)<br/>下次重试同一批"]
+
+    NewSession["新会话启动"] --> SessionStart2{"SessionStart Hook"}
+    SessionStart2 --> InjectPy["inject.py"]
+    InjectPy --> OrphanScan["transcript_store.find_orphan_sessions()<br/>status=processing 且 stale(600s)的其他session"]
+    OrphanScan -- "有孤儿" --> BgSpawn["临时文件+Popen 后台起进程<br/>跑 mode=force 补总结，不等待"]
+    OrphanScan -- "无孤儿" --> ReadSummary
+    BgSpawn --> ReadSummary["读 project-summary.md"]
+    ReadSummary --> Context["[project-recap] 区块<br/>排在 [habit]/[project] 之前"]
+        </pre>
+      </div>
+      <p style="font-size:0.86rem;color:var(--text-dim)">
+        所有 Hook 由 <code>.claude/settings.json</code> 注册，命令都指向 <code>.venv/bin/python3</code>（不能用裸
+        <code>python3</code>，因为模块级 <code>import memory_lib</code> 发生在任何 try/except 之前）。<code>Stop</code> 下同时挂了
+        <code>extract.py</code> 和 <code>summarize.py</code> 两个 command，两条管线各自独立的 SQLite 游标互不影响。全部脚本以
+        <code>exit code 0</code> 结束，任何内部异常只写 stderr，不阻塞工具调用/会话结束/压缩/会话启动。
+      </p>
+    </section>
+
+    <section id="observe">
+      <h2><span class="num">02</span> 观察 · <code>observe.py</code>（PostToolUse）</h2>
+      <p class="purpose">阅读目的：确认一条观测记录从工具调用原始 payload 到落盘之间经过了哪些过滤，哪些内容被丢弃。</p>
+      <div class="callout open">
+        <strong>2026-07-28：采集范围改为对齐得物开源实现（重大变更）</strong>
+        最初设计是字段白名单（<code>Read</code>/<code>Edit</code> 只留 <code>file_path</code>，<code>Bash</code> 只留 <code>command</code>，
+        <code>tool_response</code> 从不落盘）。对照得物开源复刻仓库（<code>ditingdapeng/agent-memory-system</code>）实测发现对方是
+        完整保留 <code>tool_input</code> + <code>tool_response</code> 前 500 字符，只靠正则脱敏。用户明确要求"完全对齐得物"后，
+        字段白名单函数已删除，现在是：<code>tool_input</code> 完整保留不裁剪；<code>tool_response</code> 是字符串时截取前 500 字符存进
+        <code>tool_response_summary</code> 列，非字符串直接丢弃。
+      </div>
+      <p>唯一保留的额外保护层：<strong>敏感文件名整条丢弃</strong>（比得物严格，得物本身没有这道门槛，是本项目额外加的）。写入前还有
+      正则脱敏兜底：<code>filter_sensitive()</code> 屏蔽 <code>sk-*</code>/<code>ark-*</code>/<code>token=*</code>/<code>ghp_*</code>（GitHub token）/
+      <code>AKIA*</code>（AWS key）/<code>Bearer *</code> 这些模式；命中 <code>.env</code>/<code>.pem</code>/<code>.key</code>/<code>id_rsa</code>/
+      <code>.npmrc</code>/<code>.aws</code>/<code>credentials</code>/<code>secrets</code> 关键字的记录，<code>tool_input</code>/<code>tool_response</code>/
+      <code>tool_response_summary</code> 三个字段整体替换为 <code>&lt;REDACTED: sensitive file&gt;</code>。去重用原始
+      <code>tool_input</code> 算 sha256，5 分钟内同工具同参数的重复调用不会重复写入 <code>observations</code> 表。</p>
+    </section>
+
+    <section id="extract">
+      <h2><span class="num">03</span> 提炼 · <code>extract.py</code>（Stop）</h2>
+      <p class="purpose">阅读目的：理解增量处理 + 并发跳过机制的完整分支，以及提示词字段结构如何决定 id 是中文还是英文。</p>
+      <div class="callout">
+        <strong>Stop 不是"会话结束"，是"每次 assistant 回复结束"</strong>
+        一次会话里可能触发几十次 Stop。早期实现是每次都全量重读该 session 的全部历史观测再分析，
+        现在改为增量处理（<code>session_progress</code> 游标机制），否则同一批早期观测会被反复重新喂给 LLM。
+      </div>
+      <div class="diagram-wrap">
+        <pre class="mermaid">
+flowchart TD
+    Start["main() 收到 session_id + last_assistant_message"]
+    NoSid{"session_id 为空?"}
+    Start --> NoSid
+    NoSid -- 是 --> Return1["直接返回"]
+    NoSid -- 否 --> Claim["try_claim_session(session_id)"]
+    Claim --> Busy{"status=processing 且<br/>updated_at 未超600s?"}
+    Busy -- 是 --> ReturnNone["返回 None"]
+    ReturnNone --> Return2["main() 跳过，不重试"]
+    Busy -- 否 --> Mark["原子标记 status=processing<br/>返回 last_processed_id"]
+    Mark --> Fetch["list_new_session_observations(after_id)"]
+    Fetch --> Empty{"结果为空?"}
+    Empty -- 是 --> ReleaseSame["release_session(原 after_id)"]
+    ReleaseSame --> Return3["返回"]
+    Empty -- 否 --> TryBlock["try: 分析流程"]
+    TryBlock --> Stat["detect_patterns() 统计路径<br/>(domain 收窄为枚举: workflow/git/testing/...)"]
+    TryBlock --> Summ["_summarize() 截断4000字符"]
+    Summ --> LLMCall["_run_llm_analysis(summary, last_message)"]
+    LLMCall --> LLMErr{"LLM 抛异常/超时?"}
+    LLMErr -- 是 --> Degrade["降级为空结果<br/>不中断流程"]
+    LLMErr -- 否 --> Merge["候选合并"]
+    Degrade --> Merge
+    Stat --> Merge
+    Merge --> UpdateInstincts["_update_hit_instincts()<br/>id 优先信任LLM/检测器给出的kebab-case"]
+    Merge --> WriteFacts["_write_project_facts()<br/>name 同上，不合法才_slugify兜底"]
+    UpdateInstincts --> Regen["regenerate_rules_file()"]
+    WriteFacts --> Finally["finally: 无论是否异常"]
+    Regen --> Finally
+    TryBlock -. 抛出未捕获异常 .-> Finally
+    Finally --> ReleaseMax["release_session(max_id)"]
+    ReleaseMax --> Return4["main() 返回"]
+        </pre>
+      </div>
+
+      <h3>2026-07-28：提示词字段结构完全对齐得物</h3>
+      <p>curl 拉取得物开源复刻仓库 <code>scripts/analyze_instincts.py</code> / <code>extract_memories.py</code> 的真实 prompt 源码后确认：
+      得物的 <code>id</code>/<code>name</code> 字段是 <strong>LLM 直接产出的英文 kebab-case</strong>，不是本地对文本 slugify 出来的——这正是
+      之前 id 一直是中文的根因。已把 prompt 和内部字段名都改成一致：</p>
+      <div class="example-file"><span class="k">instincts:</span>  {"id": "read-before-edit-pattern", "trigger": "...", "action": "...", "domain": "workflow", "evidence": "..."}
+<span class="k">project_facts:</span>  {"name": "uses-pnpm", "description": "...", "body": "...", "type": "project", "keywords": [...]}</div>
+      <p><code>_sanitize_id()</code> 校验 LLM 给出的 id/name 是否为合法英文 kebab-case，合法直接用，不合法（LLM 未遵守指令、或走
+      NullProvider 规则兜底路径）才退化为本地 <code>_slugify()</code>。<code>domain</code> 收窄为固定枚举
+      <code>workflow / testing / git / code-style / project-context</code>，<code>project_facts</code> 的 <code>type</code> 扩成
+      <code>project / feedback / error / workflow</code> 四类，并加了排除清单（"不要提取一次性临时操作/过细代码变更/显而易见的通用知识"）。</p>
+      <p style="font-size:0.86rem;color:var(--text-dim)">未对齐之处：仍是一次 <code>analyze()</code> 调用同时产出 instincts 和 project_facts（得物是两个脚本两次独立调用），
+      出于成本/延迟考虑保留合并调用；<code>project_facts</code> 额外要求的 <code>keywords</code> 字段是本项目自己为语义去重加的，得物原版没有。</p>
+
+      <div class="callout open">
+        <strong>已移除：按批次衰减（_decay_missed_instincts）</strong>
+        原逻辑"本次候选没命中的活跃 instinct 一律 confidence −0.05"建立在"每次都看得到全会话历史"的前提上。
+        改成小批量增量后继续按批次衰减会让几乎全部 instinct 快速跌破 deprecate 阈值——已移除该调用，衰减机制待重新设计
+        （候选方案：按 <code>last_seen</code> 距今天数做时间维度衰减）。
+      </div>
+    </section>
+
+    <section id="inject">
+      <h2><span class="num">04</span> 注入 · <code>inject.py</code>（SessionStart）</h2>
+      <p class="purpose">阅读目的：确认最终打到 stdout、被 Claude Code 自动注入上下文的内容具体由哪几段拼成，以及孤儿 session 补漏何时发生。</p>
+      <p>SessionStart（含 <code>/compact</code> 触发的那次）是官方确认 stdout 会被直接注入上下文的事件之一。输出按顺序由三段拼接：</p>
+      <div class="card-grid">
+        <div class="card">
+          <h4><span class="pill recap">project-recap</span> 情景记忆（新增，排最前）</h4>
+          <p>读 <code>memory/project-summary.md</code>，非空整段作为 <code>[project-recap]</code> 注入——"我们做到哪了"比习惯/事实更适合先读。</p>
+        </div>
+        <div class="card">
+          <h4><span class="pill instinct">habit</span> 确定性阈值过滤</h4>
+          <p><code>storage.list_promoted_instincts()</code> 直接读 <code>instincts/*.md</code>，confidence≥0.7 且未 deprecated 的全部，
+          按 confidence 降序，上限 30 条，不经过向量召回。</p>
+        </div>
+        <div class="card">
+          <h4><span class="pill memory">project/feedback/error/workflow</span> 相似度排序截断</h4>
+          <p><code>build_query(cwd)</code> = 项目名 + <code>git log --oneline -3</code>；<code>list_memories()</code> 全量取出后走 embedding 召回 Top-5。</p>
+        </div>
+      </div>
+      <div class="callout recap">
+        <strong>孤儿 session 补漏：不阻塞会话启动</strong>
+        <code>find_orphan_sessions()</code> 找出"卡在 <code>processing</code> 超过 600s 且不是当前 session"的旧 session（这类 session
+        天然是"曾经在处理、但从未等到 release 就结束了"——如果达到过阈值/被强制刷新过就已经 release 了）。命中的话用临时文件承载 payload
+        当子进程 stdin、<code>Popen()</code> 起一个独立进程跑 <code>summarize.py</code> 的 <code>mode=force</code>，全程没有
+        <code>write()</code>/<code>communicate()</code>/<code>wait()</code> 等任何会阻塞的调用——真正的"发起后立刻返回"。这次注入用的可能是
+        "稍旧"的总结，孤儿内容补完后下一次会话才会读到。
+      </div>
+    </section>
+
+    <section id="recap">
+      <h2><span class="num">05</span> 情景记忆 · <code>project-summary.md</code> 滚动总结</h2>
+      <p class="purpose">阅读目的：理解这条新管线为什么数据源、存储模型、失败处理策略都跟 instinct/memory 管线刻意不同。</p>
+      <p><code>--resume</code>/<code>--continue</code> 能找回完整历史，但要重新加载整段 transcript，首次 token 消耗很大。这条管线的目标是：
+      持续把对话内容（用户输入 + assistant 最终回复）滚动总结成<strong>单份、持续演进</strong>的项目工作记忆文档，新会话启动时自动注入，
+      不需要手动 <code>--resume</code>。</p>
+
+      <h3>数据源：直接解析 transcript JSONL</h3>
+      <p><code>memory_lib/transcript.py</code> 的 <code>parse_new_turns(transcript_path, after_uuid)</code> 读 Claude Code 自己写的
+      transcript 文件，按状态机顺序扫描：遇到真实用户消息（<code>type=="user"</code> 且 <code>message.content</code> 是<strong>字符串</strong>）
+      开启新轮次；随后每条 <code>type=="assistant"</code> 记录只取 <code>content</code> 数组里 <code>type=="text"</code> 的块依次拼接，直到下一条
+      真实用户消息才 flush——工具结果伪装成 <code>user</code> 角色（<code>content</code> 是数组）和穿插的 <code>tool_use</code> 块都被正确过滤/跳过。
+      单轮文本超过 4000 字符截断。这是未文档化的内部格式（对照 <code>UserPromptSubmit</code>+<code>last_assistant_message</code> 两个
+      官方字段拼接的方案后，权衡"能拿到工具调用细节"选择了 transcript 解析，接受升级可能破坏解析的风险）。</p>
+
+      <h3>触发：数量阈值 + PreCompact + SessionEnd 三重</h3>
+      <p>Stop 常规触发只在累计新增轮次 ≥ <code>_TURN_THRESHOLD</code>(100) 时才真正总结，未达阈值时<strong>不 release</strong>，游标停在
+      <code>processing</code> 留到下次累积。PreCompact（内容即将被压缩前）和 SessionEnd（会话正常终止）都是 <code>force</code> 模式，
+      跳过阈值判断，只要有新增轮次就总结——PreCompact 保证"真正要丢内容之前"必有一次总结，SessionEnd 保证正常退出时不留尾巴。</p>
+
+      <h3>失败处理：跟 extract.py 刻意不同的取舍</h3>
+      <div class="callout win">
+        <strong>cursor 只在总结成功写入后才推进</strong>
+        <code>extract.py</code> 的哲学是"丢了就丢了，行为习惯会反复出现，下次还能学到"；但对话内容是一次性的，这批 turns 一旦被跳过就
+        再也不会出现在总结里。所以 <code>summarize.py</code> 的 LLM 调用失败时，<code>release_session</code> 传回的是<strong>本批开始前的原始
+        cursor</strong>，下次触发重试同一批内容，而不是像 <code>extract.py</code> 那样无条件推进丢弃。
+      </div>
+
+      <h3>实现过程中发现并修复的设计缺陷</h3>
+      <p><code>transcript_store.try_claim_session()</code> 最初对"全新 session"（claim 成功，cursor 恰好是 None）和"锁被占用未超时"
+      （claim 失败，应该跳过）这两种语义完全不同的场景都返回 <code>None</code>，调用方无法区分——每个新 session 的第一次总结都会因此卡死。
+      已改成显式的 <code>(claimed: bool, cursor: str | None)</code> 元组返回，从根上消除歧义。</p>
+
+      <h3>project-summary.md 真实内容片段</h3>
+      <div class="example-file">本项目 c-memory 是一个为 Claude Code 设计的个人记忆系统...系统通过三个 Hook 实现闭环...
+
+<span class="k">最近完成的工作：</span>
+1. 新增「项目工作记忆」功能：设计并实现了完整的对话总结管线...
+2. 修复设计缺陷：try_claim_session 返回值从单一 None 改为 (claimed, cursor) 元组...
+3. 与得物实现对齐：提示词改为 id/trigger/action/domain/evidence + name/description/body/type/keywords...
+
+<span class="k">待办事项：</span>
+- 真实使用中验证"连续对话超过100轮自动更新"和"手动 /compact 触发强制刷新"两个场景</div>
+      <p style="font-size:0.86rem;color:var(--text-dim)">这是本次会话真实生成的总结（非示例），可见它确实抓住了"最近做了什么、还有什么待办"，
+      风格是叙述性 markdown，不是结构化列表——这是 prompt 明确要求的（<code>_SUMMARY_SYSTEM_PROMPT</code>），避免变成第二份 memories 列表。</p>
+    </section>
+
+    <section id="taxonomy">
+      <h2><span class="num">06</span> 记忆分层与来源</h2>
+      <p class="purpose">阅读目的：区分五类落盘数据分别对应哪种记忆类型、来自哪条生产链路。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>数据</th><th>记忆类型</th><th>来源</th><th>去重/演化方式</th></tr></thead>
+          <tbody>
+            <tr>
+              <td><span class="pill obs">obs</span> <code>.observations.sqlite3</code></td>
+              <td>情景记忆原始痕迹（未提炼）</td>
+              <td>每次工具调用的完整 tool_input + tool_response 前500字符</td>
+              <td>300s 内 sha256 防抖动（非语义去重）</td>
+            </tr>
+            <tr>
+              <td><span class="pill instinct">instinct</span> <code>instincts/*.md</code></td>
+              <td>程序性 / 行为记忆</td>
+              <td>规则检测器 + LLM <code>analyze().instincts</code>（同一份 summary）</td>
+              <td><code>char_jaccard</code>，同 domain 门槛；id 由 LLM 直接生成</td>
+            </tr>
+            <tr>
+              <td><span class="pill rule">rule</span> <code>rules/auto-evolved.md</code></td>
+              <td>同为程序性记忆，是 instincts 的<strong>物化视图</strong>，非独立来源</td>
+              <td>从 instincts 按 confidence 筛选整体重写</td>
+              <td>无（继承 instincts 的去重结果）</td>
+            </tr>
+            <tr>
+              <td><span class="pill memory">memory</span> <code>memories/*.md</code></td>
+              <td>语义 / 事实记忆</td>
+              <td>只有 LLM <code>analyze().project_facts</code>（同一次调用），无 Key 时退化为 pnpm/npm/yarn 关键词规则</td>
+              <td><code>char_jaccard</code>，keywords 交集门槛；name 由 LLM 直接生成</td>
+            </tr>
+            <tr>
+              <td><span class="pill recap">recap</span> <code>project-summary.md</code></td>
+              <td>情景记忆，"当前对话进展到哪了"（新增）</td>
+              <td>直接解析 transcript JSONL 的对话轮次，滚动 LLM 总结</td>
+              <td>无语义去重——单份持续覆盖演进，不是多条记录</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <h3>当前真实数据（<code>confidence ≥ 0.7</code> 已晋升为规则）</h3>
+      <div class="confbar-row">
+        <div class="confbar-label"><span class="pill instinct">git</span> 本次会话执行了多次 Bash 调用但从未 commit/push</div>
+        <div class="confbar-track"><div class="confbar-fill" style="width:75%"></div></div>
+        <div class="confbar-val">0.75</div>
+      </div>
+      <p style="font-size:0.85rem;color:var(--text-dim)">唯一晋升规则；其余 25 条活跃 instinct 均未达 0.7 门槛，34 条 memories 全部来自项目事实链路。
+      这批数据是 2026-07-28 清空重置后、系统在本次会话中真实运行重新沉淀的，id 已全部是英文 kebab-case。</p>
+    </section>
+
+    <section id="storage">
+      <h2><span class="num">07</span> 存储层：文件 vs SQLite</h2>
+      <p class="purpose">阅读目的：说明为什么同一个系统里一部分数据用 git 可追踪的 markdown，一部分用 SQLite，不是随意选择。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>路径</th><th>形式</th><th>git 追踪</th><th>为什么</th></tr></thead>
+          <tbody>
+            <tr><td><code>instincts/</code> / <code>memories/</code> / <code>rules/auto-evolved.md</code></td><td>YAML frontmatter + Markdown</td><td><span class="pill good">是</span></td><td>要能 <code>git diff</code> 看行为习惯怎么演化、能手工打开改一条记录，可读性优先</td></tr>
+            <tr><td><code>project-summary.md</code></td><td>纯 Markdown 叙述文本</td><td><span class="pill good">是</span></td><td>持续演进的单份总结，人可读可 review，跟其余可提交数据同等对待</td></tr>
+            <tr><td><code>.observations.sqlite3</code></td><td>SQLite（<code>observations</code> + <code>session_progress</code> 两表）</td><td><span class="pill bad">否</span></td><td>高频追加、纯行为信号、从不给人看；原 jsonl 手写轮转逻辑复杂度和收益不成正比</td></tr>
+            <tr><td><code>.transcript_progress.sqlite3</code></td><td>SQLite（<code>session_progress</code> 表，含 <code>transcript_path</code>）</td><td><span class="pill bad">否</span></td><td>情景记忆管线独立的游标状态，跟语义记忆管线的游标是两套互不共享的表</td></tr>
+            <tr><td><code>.vector_cache.sqlite3</code></td><td>SQLite + sqlite-vec 扩展</td><td><span class="pill bad">否</span></td><td>embedding 结果缓存，按 memory_id + 内容哈希失效，纯派生数据，可随时重建</td></tr>
+            <tr><td><code>.dedup_state.json</code></td><td>纯 JSON</td><td><span class="pill bad">否</span></td><td>observe.py 的短期防抖动状态</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p style="font-size:0.86rem;color:var(--text-dim)"><code>.gitignore</code> 用通配符 <code>memory/.*.sqlite3</code> 统一忽略所有运行时 SQLite 文件，
+      不用每加一个新缓存/状态文件都手动改一行。</p>
+    </section>
+
+    <section id="confidence">
+      <h2><span class="num">08</span> 置信度演化</h2>
+      <p class="purpose">阅读目的：确认命中/未命中如何量化影响 confidence，以及晋升/废弃两个阈值的实际效果。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>常量</th><th>值</th><th>含义</th></tr></thead>
+          <tbody>
+            <tr><td><code>INITIAL_CONFIDENCE</code></td><td>0.5</td><td>新建 instinct 的起始值</td></tr>
+            <tr><td><code>HIT_DELTA</code></td><td>+0.05</td><td>命中一次的增量</td></tr>
+            <tr><td><code>CONFIDENCE_CAP</code></td><td>0.9</td><td>命中不会超过这个上限</td></tr>
+            <tr><td><code>PROMOTE_THRESHOLD</code></td><td>0.7</td><td>≥ 此值才会被 <code>regenerate_rules_file</code> 收进规则文件、被 <code>inject.py</code> 注入</td></tr>
+            <tr><td><code>DEPRECATE_THRESHOLD</code></td><td>0.55</td><td>&lt; 此值标记 <code>deprecated: true</code>（衰减机制本身当前已停用，见 §3）</td></tr>
+            <tr><td><code>RULES_LIMIT</code></td><td>30</td><td>规则文件/注入的 instinct 条数硬上限</td></tr>
+            <tr><td><code>_TURN_THRESHOLD</code></td><td>100</td><td>情景记忆 Stop 常规触发的轮次阈值（PreCompact/SessionEnd 跳过此判断）</td></tr>
+            <tr><td><code>STALE_PROCESSING_SECONDS</code></td><td>600</td><td>两条管线的并发锁 / 孤儿判定共用这个超时值</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="providers">
+      <h2><span class="num">09</span> Provider 降级矩阵</h2>
+      <p class="purpose">阅读目的：确认没有配置任何 API Key 时两条管线是否还能跑通（能，只是精度打折）。</p>
+      <div class="card-grid">
+        <div class="card">
+          <h4>LLM：<code>get_llm_provider()</code></h4>
+          <p><code>DEEPSEEK_API_KEY</code> 非空 → <code>DeepSeekProvider</code>（OpenAI 兼容 <code>/chat/completions</code>，10s 超时）。
+          否则 → <code>NullProvider</code>：不发请求，只用 <code>\b</code> 词边界正则匹配 pnpm/npm/yarn，只能产出 <code>project_facts</code>。</p>
+        </div>
+        <div class="card">
+          <h4>LLM 第二能力：<code>summarize_conversation()</code></h4>
+          <p><code>DeepSeekProvider</code> 失败时<strong>抛异常</strong>（不是静默返回空串）——让 <code>summarize.py</code> 能感知失败、
+          不推进 cursor。<code>NullProvider</code> 原样返回 <code>previous_summary</code>：没有真正总结能力，但至少不丢已有总结。</p>
+        </div>
+        <div class="card">
+          <h4>Embedding：<code>get_embedding_provider()</code></h4>
+          <p><code>ARK_API_KEY</code> 非空时先探活（<code>embed(["ping"])</code>，5s 超时），成功 → <code>ArkProvider</code>
+          （<code>SUPPORTS_CACHE=True</code>，走 sqlite-vec 缓存）；探活失败或未配置 → <code>TfidfProvider</code>
+          （本地 sklearn，每次现场 fit，不缓存）。</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="privacy">
+      <h2><span class="num">10</span> 隐私过滤</h2>
+      <p class="purpose">阅读目的：确认"完整采集"这条对齐得物的路线，具体由哪几层机制兜住隐私风险。</p>
+      <ol style="max-width:74ch">
+        <li><strong>tool_input 完整保留，tool_response 只截前500字符</strong>——2026-07-28 对齐得物后不再做字段白名单裁剪，这是主动放开的采集范围，用户在 <code>AskUserQuestion</code> 里明确选择了"完全对齐得物"这个选项。</li>
+        <li><strong>正则脱敏</strong>——<code>filter_sensitive()</code> 覆盖 <code>sk-*</code>/<code>ark-*</code>/通用 <code>token=*</code>/<code>ghp_*</code>/<code>AKIA*</code>/<code>Bearer *</code> 六类模式，命中替换为 <code>***REDACTED***</code>。</li>
+        <li><strong>敏感文件名整条丢弃（比得物严格，本项目自己加的）</strong>——命中 <code>.env</code>/<code>.pem</code>/<code>.key</code>/<code>id_rsa</code>/<code>.npmrc</code>/<code>.aws</code>/<code>credentials</code>/<code>secrets</code> 关键字的记录，<code>tool_input</code>/<code>tool_response</code>/<code>tool_response_summary</code> 三个字段整体替换为 <code>&lt;REDACTED: sensitive file&gt;</code>，只保留文件名本身。</li>
+      </ol>
+    </section>
+
+    <section id="open">
+      <h2><span class="num">11</span> 已知问题 / 待定项</h2>
+      <div class="card-grid">
+        <div class="card">
+          <h4>衰减机制待重新设计</h4>
+          <p><code>_decay_missed_instincts</code> 已移除，尚未实现替代方案（候选：按 <code>last_seen</code> 时间维度衰减）。</p>
+        </div>
+        <div class="card">
+          <h4>transcript JSONL 是未文档化格式</h4>
+          <p>Claude Code 升级可能导致 <code>parse_new_turns</code> 解析失败，届时静默返回空列表、总结停止更新，不会崩溃但需人工发现。</p>
+        </div>
+        <div class="card">
+          <h4>两条验收标准需真实使用观察</h4>
+          <p>"连续对话超100轮自动更新"和"手动 <code>/compact</code> 触发强制刷新"——机制已通过模拟验证，但没有真实场景触发过。</p>
+        </div>
+        <div class="card">
+          <h4>存储作用域未定</h4>
+          <p>当前是个人单机+项目内 <code>memory/</code> 目录，是否要提升为 <code>~/.claude</code> 全局配置以跨项目复用习惯，尚未决定
+          （已确认得物原版 instinct 就是全局作用域，可参考）。</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="tests">
+      <h2><span class="num">12</span> 测试与验证</h2>
+      <p class="purpose">阅读目的：确认哪些行为是单测覆盖的，哪些是靠真实运行验证的（两者互补，非互相替代）。</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>测试文件</th><th>覆盖</th></tr></thead>
+          <tbody>
+            <tr><td><code>test_confidence.py</code></td><td>命中/未命中的 confidence 增减、上限 clamp</td></tr>
+            <tr><td><code>test_privacy.py</code></td><td>正则脱敏（含 ghp_/AKIA/Bearer）、敏感文件整条丢弃（用假 key，不含真实密钥）</td></tr>
+            <tr><td><code>test_detectors.py</code></td><td>两个统计检测器的命中/不命中边界，domain 枚举值</td></tr>
+            <tr><td><code>test_dedup.py</code></td><td><code>find_similar_instinct</code> / <code>find_similar_memory</code> 的门槛+相似度合并逻辑</td></tr>
+            <tr><td><code>test_vector_cache.py</code></td><td>sqlite-vec KNN 排序、内容不变跳过重新 embed</td></tr>
+            <tr><td><code>test_storage.py</code></td><td><code>list_promoted_instincts</code> 的筛选+排序</td></tr>
+            <tr><td><code>test_observation_store.py</code></td><td>SQLite 追加、增量查询、按时间保留、认领/释放/并发跳过/过期重新认领</td></tr>
+            <tr><td><code>test_transcript.py</code></td><td>用户/assistant消息识别与过滤、多条assistant拼接、游标过滤、超长截断、畸形行容错</td></tr>
+            <tr><td><code>test_transcript_store.py</code></td><td>非阻塞 claim/release、stale 重新认领、孤儿扫描（不扫自己/不扫未超时）</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>单测之外，每次改动都用真实 stdin JSON payload 手动跑过完整链路——含情景记忆管线的端到端验证：构造 120 轮合成对话，
+      真实调用 LLM 生成总结、落盘 <code>project-summary.md</code>、<code>inject.py</code> 读出并以 <code>[project-recap]</code> 排最前注入，
+      全程验证无污染数据残留。</p>
+    </section>
+
+    <footer>
+      内容基于仓库真实代码状态生成，非规划稿。设计文档见 <code>docs/plans/2026-07-27-claude-code-memory-system-design.md</code>（语义记忆闭环）
+      和 <code>docs/plans/2026-07-29-project-summary-memory-design.md</code>（情景记忆滚动总结）。
+    </footer>
+  </main>
+</div>
