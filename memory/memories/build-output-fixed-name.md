@@ -1,11 +1,11 @@
 ---
 created: '2026-07-29'
-description: 构建产出目录固定为 dist/c-memory/
+description: 构建产物路径为 dist/.c-memory/
 id: build-output-fixed-name
 keywords:
 - build
-- deploy
+- output-path
 type: project
 ---
 
-build.sh 直接产出 dist/c-memory/（包名固定，构建即定名），部署命令简化为 cp -R dist/c-memory target-project/，不再需要用户手动加子目录或改名。
+build.sh 中 PACKAGE_NAME 设置为 .c-memory，产物输出到 dist/.c-memory/。部署命令为 cp -R dist/.c-memory target-project/。
