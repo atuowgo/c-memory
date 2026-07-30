@@ -1,11 +1,11 @@
 ---
-created: '2026-07-29'
-description: 设计文档位于docs/plans/目录
+created: '2026-07-30'
+description: 设计文档存储在 docs/plans/ 目录下
 id: design-docs-location
 keywords:
 - docs
-- design
+- plans
 type: project
 ---
 
-当前设计文档为2026-07-29-project-summary-memory-design.md，包含项目架构和模块设计。
+项目设计文档统一放在 docs/plans/ 目录，文件名格式为 YYYY-MM-DD-<title>.md，包含架构图、数据模型、时序图、改动清单等

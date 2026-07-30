@@ -1,7 +1,12 @@
 """memory_lib.dedup 单元测试。"""
 from __future__ import annotations
 
-from memory_lib.dedup import char_jaccard, find_similar_instinct, find_similar_memory
+from memory_lib.dedup import (
+    char_jaccard,
+    find_similar_instinct,
+    find_similar_memory,
+    find_similar_procedure,
+)
 
 
 def test_char_jaccard_identical_strings_is_one():
@@ -67,3 +72,39 @@ def test_find_similar_memory_no_keywords_returns_none():
     ]
     match = find_similar_memory("项目使用 pytest 作为测试框架", [], candidates)
     assert match is None
+
+
+def test_find_similar_procedure_matches_similar_task_type():
+    candidates = [
+        {"id": "a", "task_type": "编写单元测试并运行验证"},
+    ]
+    match = find_similar_procedure("编写单元测试并执行验证", candidates)
+    assert match is not None
+    assert match["id"] == "a"
+
+
+def test_find_similar_procedure_returns_none_when_no_match():
+    candidates = [
+        {"id": "a", "task_type": "编写单元测试并运行验证"},
+    ]
+    match = find_similar_procedure("部署生产环境镜像", candidates)
+    assert match is None
+
+
+def test_find_similar_procedure_returns_none_for_empty_candidates():
+    match = find_similar_procedure("编写单元测试并运行验证", [])
+    assert match is None
+
+
+def test_find_similar_procedure_ignores_domain_and_keywords_fields():
+    candidates = [
+        {
+            "id": "a",
+            "task_type": "编写单元测试并运行验证",
+            "domain": "完全不同的领域",
+            "keywords": ["完全", "不同", "关键词"],
+        },
+    ]
+    match = find_similar_procedure("编写单元测试并执行验证", candidates)
+    assert match is not None
+    assert match["id"] == "a"

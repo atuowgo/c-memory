@@ -102,6 +102,44 @@ def list_new_session_observations(session_id: str, after_id: int) -> list[dict]:
     return results
 
 
+def list_session_observations_in_range(session_id: str, ts_start: str, ts_end: str | None) -> list[dict]:
+    """按时间区间取该 session 的观测记录，供 procedure mining 按用户轮次的时间区间挖掘工具调用序列，按 id ASC 保序返回。"""
+    conn = _connect()
+    try:
+        if ts_end is not None:
+            rows = conn.execute(
+                "SELECT id, session_id, ts, tool_name, tool_input_json, tool_response_summary FROM observations "
+                "WHERE session_id = ? AND ts >= ? AND ts < ? ORDER BY id ASC",
+                (session_id, ts_start, ts_end),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, session_id, ts, tool_name, tool_input_json, tool_response_summary FROM observations "
+                "WHERE session_id = ? AND ts >= ? ORDER BY id ASC",
+                (session_id, ts_start),
+            ).fetchall()
+    finally:
+        conn.close()
+
+    results = []
+    for row_id, row_session_id, ts, tool_name, tool_input_json, tool_response_summary in rows:
+        try:
+            tool_input = json.loads(tool_input_json)
+        except json.JSONDecodeError:
+            tool_input = {}
+        results.append(
+            {
+                "id": row_id,
+                "session_id": row_session_id,
+                "ts": ts,
+                "tool_name": tool_name,
+                "tool_input": tool_input,
+                "tool_response_summary": tool_response_summary,
+            }
+        )
+    return results
+
+
 def try_claim_session(session_id: str, stale_after_seconds: int = STALE_PROCESSING_SECONDS) -> int | None:
     """尝试拿到该 session 的增量处理权，不阻塞等待。
 

@@ -58,3 +58,8 @@ def find_similar_memory(description: str, keywords: list[str], candidates: list[
         if own_keywords & {kw.strip().lower() for kw in (cand.get("keywords") or []) if kw and kw.strip()}
     ]
     return _best_char_jaccard_match(description, gated, "description")
+
+
+def find_similar_procedure(task_type: str, candidates: list[dict]) -> dict | None:
+    """procedure 之间没有 domain/keywords 分组门槛，直接全量比对 task_type 文本相似度。"""
+    return _best_char_jaccard_match(task_type, candidates, "task_type")

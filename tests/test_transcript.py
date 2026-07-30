@@ -8,8 +8,11 @@ import pytest
 from memory_lib import transcript
 
 
-def _user_record(uuid: str, content) -> dict:
-    return {"type": "user", "message": {"role": "user", "content": content}, "uuid": uuid}
+def _user_record(uuid: str, content, timestamp: str | None = None) -> dict:
+    record = {"type": "user", "message": {"role": "user", "content": content}, "uuid": uuid}
+    if timestamp is not None:
+        record["timestamp"] = timestamp
+    return record
 
 
 def _write_jsonl(tmp_path, records) -> str:
@@ -29,7 +32,7 @@ def test_real_user_message_with_string_content_is_recognized(tmp_path):
     turns = transcript.parse_new_turns(path, None)
 
     assert len(turns) == 1
-    assert turns[0] == {"uuid": "u1", "user": "第一个问题", "assistant": "第一个回复"}
+    assert turns[0] == {"uuid": "u1", "user": "第一个问题", "assistant": "第一个回复", "ts": ""}
 
 
 def test_tool_result_disguised_as_user_is_filtered_out(tmp_path):
@@ -157,3 +160,39 @@ def test_nonexistent_transcript_path_returns_empty_list():
 
 def test_empty_transcript_path_returns_empty_list():
     assert transcript.parse_new_turns("", None) == []
+
+
+def test_turn_ts_field_reflects_user_record_timestamp(tmp_path):
+    records = [
+        _user_record("u1", "第一个问题", timestamp="2026-07-30T10:00:00Z"),
+        {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "第一个回复"}]}, "uuid": "a1"},
+    ]
+    path = _write_jsonl(tmp_path, records)
+
+    turns = transcript.parse_new_turns(path, None)
+
+    assert turns[0]["ts"] == "2026-07-30T10:00:00Z"
+
+
+def test_turn_ts_field_defaults_to_empty_when_timestamp_missing(tmp_path):
+    records = [
+        _user_record("u1", "第一个问题"),
+        {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "第一个回复"}]}, "uuid": "a1"},
+    ]
+    path = _write_jsonl(tmp_path, records)
+
+    turns = transcript.parse_new_turns(path, None)
+
+    assert turns[0]["ts"] == ""
+
+
+def test_turn_ts_field_defaults_to_empty_when_timestamp_not_string(tmp_path):
+    records = [
+        _user_record("u1", "第一个问题", timestamp=1234567890),
+        {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "第一个回复"}]}, "uuid": "a1"},
+    ]
+    path = _write_jsonl(tmp_path, records)
+
+    turns = transcript.parse_new_turns(path, None)
+
+    assert turns[0]["ts"] == ""

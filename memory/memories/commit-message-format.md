@@ -1,11 +1,11 @@
 ---
 created: '2026-07-29'
-description: Git 提交信息使用 heredoc 方式，包含 [#AI commit#] 和 [Claude Code] 前缀
+description: 提交信息遵循 [#AI commit#][Claude Code] 前缀格式
 id: commit-message-format
 keywords:
-- git
 - commit
+- message
 type: workflow
 ---
 
-提交信息格式为：git commit -m "$(cat <<'EOF'\n[#AI commit#][Claude Code]...\nEOF\n)"
+提交信息以 [#AI commit#][Claude Code] 开头，后接类型和作用域描述，如 refactor(deploy): ...。

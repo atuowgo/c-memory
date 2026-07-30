@@ -14,7 +14,11 @@
 
 4. **数据清理**：清空本地 instinct/memory/rules 数据，重置为干净状态。新生成的 instinct/memory 已使用英文 kebab-case id。
 
-**当前状态**：77 个测试全部通过。系统已在本次会话中真实运行，生成了若干英文 id 的行为习惯和项目事实。设计文档 `docs/plans/2026-07-29-project-summary-memory-design.md` 已落盘。
+5. **构建打包与部署系统**：实现了完整的 `build.sh` → `dist/.c-memory/` 构建管线，产物为自包含子目录（隐藏目录，与 `.venv`/`.serena` 命名约定一致），包含 `hooks/`、`memory_lib/`、`settings.template.json`、`merge_settings.py`、`install.sh`、`.env.example`、`requirements.txt`、`README.md`。部署命令简化为 `cp -R dist/.c-memory target-project/`。`install.sh` 自动识别子目录名，通过 `merge_settings.py` 按 hook 事件维度做真正的 JSON 合并（不覆盖目标项目已有配置，幂等）。修复了 macOS 系统自带 bash 3.2 对 `$VAR` 后紧跟全角中文标点的解析 bug（改用 `${VAR}` 大括号写法）。`docs/build-and-deploy.md` 已落盘，包含完整流程图、命令、验证清单和已知限制。
+
+6. **文档输出**：基于真实代码状态生成了 `docs/c-memory-overview.html`（44.9KB），覆盖总体架构（两条独立管线 mermaid 图）、设计思路、数据流转、数据模型、已知 bug 和局限。
+
+**当前状态**：77 个测试全部通过。系统已在本次会话中真实运行，生成了若干英文 id 的行为习惯和项目事实。设计文档 `docs/plans/2026-07-29-project-summary-memory-design.md` 已落盘。`dist/` 已加入 `.gitignore`（构建产物不进版本库）。`main` 分支已同步到远端（`dc0bb01`），工作树干净。
 
 **待办事项**：
 - 真实使用中验证"连续对话超过100轮自动更新"和"手动 `/compact` 触发强制刷新"两个场景

@@ -21,6 +21,20 @@
           {
             "type": "command",
             "command": "${CLAUDE_PROJECT_DIR}/.venv/bin/python3 ${CLAUDE_PROJECT_DIR}/hooks/summarize.py"
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.venv/bin/python3 ${CLAUDE_PROJECT_DIR}/hooks/mine_procedures.py"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.venv/bin/python3 ${CLAUDE_PROJECT_DIR}/hooks/notify_pending_procedures.py"
           }
         ]
       }

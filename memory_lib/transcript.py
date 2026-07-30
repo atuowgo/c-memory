@@ -43,9 +43,11 @@ def _extract_assistant_text(record: dict) -> str:
 
 
 def parse_new_turns(transcript_path: str, after_uuid: str | None) -> list[dict]:
-    """返回 [{"uuid": "...", "user": "...", "assistant": "..."}]，按 transcript 顺序。
+    """返回 [{"uuid": "...", "user": "...", "assistant": "...", "ts": "..."}]，按 transcript 顺序。
 
     uuid 取该轮里"真实用户输入那条记录"的 uuid（用作下次调用的游标）。
+    ts 取该轮里"真实用户输入那条记录"的顶层 timestamp 字段（ISO8601 字符串）；
+    缺失或非字符串时为空字符串 ""。
     after_uuid=None 表示从头开始；非 None 表示只返回该 uuid 之后的轮次（不含该 uuid
     本身对应的轮次）。找不到 after_uuid（比如文件被截断过）时保守地从头返回全部。
     """
@@ -61,6 +63,7 @@ def parse_new_turns(transcript_path: str, after_uuid: str | None) -> list[dict]:
     turns: list[dict] = []
     current_uuid: str | None = None
     current_user_text: str | None = None
+    current_ts: str = ""
     current_assistant_parts: list[str] = []
 
     def _flush_current_turn() -> None:
@@ -71,6 +74,7 @@ def parse_new_turns(transcript_path: str, after_uuid: str | None) -> list[dict]:
                 "uuid": current_uuid,
                 "user": _truncate(current_user_text or ""),
                 "assistant": _truncate("\n".join(current_assistant_parts)),
+                "ts": current_ts or "",
             }
         )
 
@@ -95,6 +99,8 @@ def parse_new_turns(transcript_path: str, after_uuid: str | None) -> list[dict]:
             _flush_current_turn()
             current_uuid = uuid
             current_user_text = record["message"]["content"]
+            ts = record.get("timestamp")
+            current_ts = ts if isinstance(ts, str) else ""
             current_assistant_parts = []
         elif record_type == "assistant":
             if current_uuid is None:

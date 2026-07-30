@@ -28,6 +28,13 @@ class LLMProvider(abc.ABC):
         返回值是纯文本（不是 JSON），会被直接整段写入 memory/project-summary.md。"""
         raise NotImplementedError
 
+    @abc.abstractmethod
+    def mine_procedure(self, steps_summary: str, assistant_text: str) -> dict | None:
+        """分析一段有序工具调用摘要 + 该轮 assistant 文本，判断是否构成可复用的多步骤流程。
+        是则返回 {"id": ..., "task_type": ..., "steps": [...], "note": ...}；
+        不是（比如零散调试、单一动作）则返回 None。"""
+        raise NotImplementedError
+
 
 # 提示词字段结构完全对齐得物开源实现（agent-memory-system 的 analyze_instincts.py 的
 # LLM_ANALYSIS_PROMPT / extract_memories.py 的 EXTRACT_PROMPT，2026-07-28 curl 拉取源码核实）：
@@ -81,6 +88,32 @@ _SUMMARY_SYSTEM_PROMPT = """你是一个项目工作记忆维护助手。你会�
 4. 输出风格：一段能读的、叙述性的 markdown 文字（类似"项目进展简报"），说清楚这个项目在做什么、
    最近聊了什么、决定了什么、还有什么待办事项。不要输出 JSON，不要写成纯罗列的 bullet point 列表。
 5. 直接输出总结正文本身，不要输出任何解释性文字、前缀或后缀说明。"""
+
+
+# 流程挖掘 prompt：目标是从一轮"有序工具调用序列 + assistant 文本"里识别"值得记住的多步骤可复用流程"
+# （比如"写 md 文档+转 html"这种固定套路），跟上面两个 prompt 抽取的内容不同，是第三条独立能力。
+# 判定务必从严：只有目的明确、多步骤组合、未来同类任务大概率复用的操作序列才算流程；
+# 单次调试、零散尝试、只有 1-2 个实质性操作的一律判定为不是。
+_MINE_PROCEDURE_SYSTEM_PROMPT = """你是一个流程挖掘专家。给你一段本轮对话里的有序工具调用序列摘要，
+以及这轮 assistant 的说明文本，请判断这段操作是否构成一个"值得记住的多步骤可复用流程"。
+
+判定标准（从严）：
+- 只有当这段操作「有明确目的」「由多个步骤组合而成」「未来同类任务大概率会重复用到」时，才判定为是流程。
+- 单次调试、零散尝试、试错性质的操作，或只有 1-2 个实质性动作的琐碎操作，一律判定为不是流程。
+
+如果是流程，严格按以下 JSON 格式输出，不要输出任何其他文字：
+{
+  "is_procedure": true,
+  "id": "md-doc-with-mermaid-to-html",
+  "task_type": "一句话描述这类任务",
+  "steps": ["步骤1描述", "步骤2描述", "..."],
+  "note": "可选，为什么要这么做的补充说明，没有则空字符串"
+}
+
+其中 id 是 kebab-case 英文唯一标识。
+
+如果不是流程，只输出：
+{"is_procedure": false}"""
 
 
 class DeepSeekProvider(LLMProvider):
@@ -170,6 +203,52 @@ class DeepSeekProvider(LLMProvider):
 
         return content.strip()
 
+    def mine_procedure(self, steps_summary: str, assistant_text: str) -> dict | None:
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        user_content = (
+            f"## 本轮 assistant 说明\n\n{assistant_text or '(无)'}\n\n"
+            f"## 本轮有序工具调用序列\n\n{steps_summary}"
+        )
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": _MINE_PROCEDURE_SYSTEM_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
+            "temperature": 0.2,
+            "response_format": {"type": "json_object"},
+        }
+        try:
+            resp = requests.post(
+                self.API_URL,
+                headers=headers,
+                json=payload,
+                timeout=self.TIMEOUT_SECONDS,
+            )
+            resp.raise_for_status()
+        except requests.RequestException as exc:
+            raise LLMProviderError(f"DeepSeek API 请求失败: {exc}") from exc
+
+        try:
+            data = resp.json()
+            content = data["choices"][0]["message"]["content"]
+            result = json.loads(content)
+        except (KeyError, IndexError, ValueError) as exc:
+            raise LLMProviderError(f"DeepSeek API 响应解析失败: {exc}") from exc
+
+        if result.get("is_procedure") is not True:
+            return None
+
+        return {
+            "id": result.get("id", ""),
+            "task_type": result.get("task_type", ""),
+            "steps": result.get("steps") or [],
+            "note": result.get("note", ""),
+        }
+
 
 class NullProvider(LLMProvider):
     """纯规则 fallback，不发网络请求。目前支持包管理器关键词识别。"""
@@ -200,3 +279,8 @@ class NullProvider(LLMProvider):
     def summarize_conversation(self, previous_summary: str, new_turns_text: str) -> str:
         # 无 API key 时不做真正总结，原样返回旧总结——至少不丢已有内容，也绝不抛异常。
         return previous_summary
+
+    def mine_procedure(self, steps_summary: str, assistant_text: str) -> dict | None:
+        # 流程挖掘是语义判断（"这段操作是否值得记住"），规则匹配识别不出来，
+        # 没有 LLM 配置时干脆不挖掘，不用规则瞎猜。
+        return None
