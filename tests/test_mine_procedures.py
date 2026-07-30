@@ -12,7 +12,7 @@ import pytest
 
 import hooks.mine_procedures as mine_procedures
 from memory_lib import observation_store, procedure_store
-from memory_lib.confidence import INITIAL_CONFIDENCE
+from memory_lib.confidence import INITIAL_CONFIDENCE, MISS_DELTA, update_confidence
 from memory_lib.providers import LLMProviderError
 
 
@@ -59,16 +59,16 @@ def _obs(session_id: str, ts: str, tool_name: str = "Read", tool_input: dict | N
 
 
 class _FakeProvider:
-    """按 assistant_text 分发结果的伪 LLM provider，记录每次调用参数。"""
+    """按 assistant_text 分发结果的伪 LLM provider，记录每次调用参数（含下一轮反馈）。"""
 
     def __init__(self, result=None, results_by_assistant: dict | None = None, raise_error: bool = False):
-        self.calls: list[tuple[str, str]] = []
+        self.calls: list[tuple[str, str, str]] = []
         self._result = result
         self._results_by_assistant = results_by_assistant or {}
         self._raise_error = raise_error
 
-    def mine_procedure(self, steps_summary: str, assistant_text: str):
-        self.calls.append((steps_summary, assistant_text))
+    def mine_procedure(self, steps_summary: str, assistant_text: str, next_user_feedback: str = ""):
+        self.calls.append((steps_summary, assistant_text, next_user_feedback))
         if self._raise_error:
             raise LLMProviderError("模拟 LLM 调用失败")
         if assistant_text in self._results_by_assistant:
@@ -82,7 +82,7 @@ def _run_main(monkeypatch, session_id: str, transcript_path: str) -> None:
     mine_procedures.main()
 
 
-# ---- 场景 1：新建候选 ----
+# ---- 场景 1：新建候选（须有下一轮收尾对话，episode 才会被处理） ----
 
 
 def test_new_candidate_created_with_initial_confidence(isolated_env, monkeypatch):
@@ -90,6 +90,8 @@ def test_new_candidate_created_with_initial_confidence(isolated_env, monkeypatch
     records = [
         _user_record("u1", "帮我把md文档转成html", "2026-07-30T10:00:00Z"),
         _assistant_record("a1", "写了一份md文档并转成了html"),
+        _user_record("u2", "好的谢谢", "2026-07-30T10:05:00Z"),
+        _assistant_record("a2", "不客气"),
     ]
     transcript_path = _write_jsonl(isolated_env, records)
     for i in range(3):
@@ -101,6 +103,7 @@ def test_new_candidate_created_with_initial_confidence(isolated_env, monkeypatch
             "task_type": "写文档转html",
             "steps": ["写md", "转html", "检查"],
             "note": "",
+            "is_successful": True,
         }
     )
     monkeypatch.setattr(mine_procedures, "get_llm_provider", lambda: fake_provider)
@@ -108,11 +111,14 @@ def test_new_candidate_created_with_initial_confidence(isolated_env, monkeypatch
     _run_main(monkeypatch, session_id, transcript_path)
 
     assert len(fake_provider.calls) == 1
+    assert fake_provider.calls[0][2] == "好的谢谢"  # 下一轮用户反馈已传入 provider
     data = procedure_store.read_procedure("write-doc-html")
     assert data is not None
     assert data["status"] == "candidate"
     assert data["hit_count"] == 1
-    assert data["confidence"] == pytest.approx(INITIAL_CONFIDENCE)
+    # 新建候选也统一走 update_confidence（首次即使成功也会有 HIT_DELTA 加成），
+    # 不是无条件从 INITIAL_CONFIDENCE 起步——这样首次失败也能立刻扣分，见设计文档第7节。
+    assert data["confidence"] == pytest.approx(update_confidence(INITIAL_CONFIDENCE, hit=True))
 
 
 # ---- 场景 2：命中已有候选，累加 hit_count，复用同一 id ----
@@ -137,6 +143,8 @@ def test_hit_existing_candidate_increments_hit_count(isolated_env, monkeypatch):
     records = [
         _user_record("u1", "帮我把md文档转成html", "2026-07-30T10:00:00Z"),
         _assistant_record("a1", "写了一份md文档并转成了html"),
+        _user_record("u2", "好的谢谢", "2026-07-30T10:05:00Z"),
+        _assistant_record("a2", "不客气"),
     ]
     transcript_path = _write_jsonl(isolated_env, records)
     for i in range(3):
@@ -148,6 +156,7 @@ def test_hit_existing_candidate_increments_hit_count(isolated_env, monkeypatch):
             "task_type": "写文档转html",
             "steps": ["写md", "转html"],
             "note": "",
+            "is_successful": True,
         }
     )
     monkeypatch.setattr(mine_procedures, "get_llm_provider", lambda: fake_provider)
@@ -185,6 +194,8 @@ def test_confidence_crossing_threshold_triggers_system_message(isolated_env, mon
     records = [
         _user_record("u1", "帮我把md文档转成html", "2026-07-30T10:00:00Z"),
         _assistant_record("a1", "写了一份md文档并转成了html"),
+        _user_record("u2", "好的谢谢", "2026-07-30T10:05:00Z"),
+        _assistant_record("a2", "不客气"),
     ]
     transcript_path = _write_jsonl(isolated_env, records)
     for i in range(3):
@@ -196,6 +207,7 @@ def test_confidence_crossing_threshold_triggers_system_message(isolated_env, mon
             "task_type": "写文档转html",
             "steps": ["写md", "转html"],
             "note": "",
+            "is_successful": True,
         }
     )
     monkeypatch.setattr(mine_procedures, "get_llm_provider", lambda: fake_provider)
@@ -221,12 +233,16 @@ def test_episode_with_too_few_tool_calls_is_skipped(isolated_env, monkeypatch):
     records = [
         _user_record("u1", "随便问一下", "2026-07-30T10:00:00Z"),
         _assistant_record("a1", "简单回复"),
+        _user_record("u2", "好的", "2026-07-30T10:05:00Z"),
+        _assistant_record("a2", "不客气"),
     ]
     transcript_path = _write_jsonl(isolated_env, records)
     for i in range(2):
         _obs(session_id, f"2026-07-30T10:00:0{i + 1}Z")
 
-    fake_provider = _FakeProvider(result={"id": "x", "task_type": "y", "steps": ["a"], "note": ""})
+    fake_provider = _FakeProvider(
+        result={"id": "x", "task_type": "y", "steps": ["a"], "note": "", "is_successful": True}
+    )
     monkeypatch.setattr(mine_procedures, "get_llm_provider", lambda: fake_provider)
 
     _run_main(monkeypatch, session_id, transcript_path)
@@ -245,12 +261,14 @@ def test_llm_returning_none_skips_episode_without_blocking_others(isolated_env, 
         _assistant_record("a1", "随便回复一"),
         _user_record("u2", "再问一个真正的多步骤任务", "2026-07-30T10:05:00Z"),
         _assistant_record("a2", "写文档并转成html"),
+        _user_record("u3", "好的谢谢", "2026-07-30T10:10:00Z"),
+        _assistant_record("a3", "不客气"),
     ]
     transcript_path = _write_jsonl(isolated_env, records)
-    # episode1: [10:00:00, 10:05:00)
+    # episode0: [10:00:00, 10:05:00)
     for i in range(3):
         _obs(session_id, f"2026-07-30T10:00:0{i + 1}Z")
-    # episode2: [10:05:00, None)
+    # episode1: [10:05:00, 10:10:00)
     for i in range(3):
         _obs(session_id, f"2026-07-30T10:05:0{i + 1}Z")
 
@@ -262,6 +280,7 @@ def test_llm_returning_none_skips_episode_without_blocking_others(isolated_env, 
                 "task_type": "写文档转html",
                 "steps": ["写md", "转html"],
                 "note": "",
+                "is_successful": True,
             },
         }
     )
@@ -275,7 +294,7 @@ def test_llm_returning_none_skips_episode_without_blocking_others(isolated_env, 
     assert procedures[0]["id"] == "write-doc-html"
 
 
-# ---- 场景 6（可选）：LLM 抛 LLMProviderError 时跳过该 episode，且游标正常释放 ----
+# ---- 场景 6：LLM 抛 LLMProviderError 时跳过该 episode ----
 
 
 def test_llm_provider_error_skips_episode_and_releases_cursor(isolated_env, monkeypatch):
@@ -283,6 +302,8 @@ def test_llm_provider_error_skips_episode_and_releases_cursor(isolated_env, monk
     records = [
         _user_record("u1", "触发异常的任务", "2026-07-30T10:00:00Z"),
         _assistant_record("a1", "回复"),
+        _user_record("u2", "好的", "2026-07-30T10:05:00Z"),
+        _assistant_record("a2", "不客气"),
     ]
     transcript_path = _write_jsonl(isolated_env, records)
     for i in range(3):
@@ -299,3 +320,184 @@ def test_llm_provider_error_skips_episode_and_releases_cursor(isolated_env, monk
     claimed, cursor = procedure_store.try_claim_session(session_id, transcript_path)
     assert claimed is True
     assert cursor == "u1"
+
+
+# ---- 场景 7：下一轮反馈是负面纠正，is_successful=False 时 confidence 真的下降 ----
+
+
+def test_unsuccessful_execution_decreases_confidence(isolated_env, monkeypatch):
+    session_id = "sess-7"
+    procedure_store.write_procedure(
+        "task-html-doc",
+        {
+            "task_type": "写文档转html",
+            "hit_count": 3,
+            "confidence": 0.5,
+            "status": "candidate",
+            "skill_asked": False,
+            "first_seen": "2026-07-01",
+            "last_seen": "2026-07-01",
+            "evidence_sessions": ["sess-old"],
+        },
+        "## 步骤\n1. 写md\n2. 转html",
+    )
+    records = [
+        _user_record("u1", "帮我把md文档转成html", "2026-07-30T10:00:00Z"),
+        _assistant_record("a1", "写了一份md文档并转成了html"),
+        _user_record("u2", "不对，这样不行，重新来", "2026-07-30T10:05:00Z"),
+        _assistant_record("a2", "好的我重新来"),
+    ]
+    transcript_path = _write_jsonl(isolated_env, records)
+    for i in range(3):
+        _obs(session_id, f"2026-07-30T10:00:0{i + 1}Z")
+
+    fake_provider = _FakeProvider(
+        result={
+            "id": "some-other-id",
+            "task_type": "写文档转html",
+            "steps": ["写md", "转html"],
+            "note": "",
+            "is_successful": False,
+        }
+    )
+    monkeypatch.setattr(mine_procedures, "get_llm_provider", lambda: fake_provider)
+
+    _run_main(monkeypatch, session_id, transcript_path)
+
+    assert fake_provider.calls[0][2] == "不对，这样不行，重新来"
+    data = procedure_store.read_procedure("task-html-doc")
+    assert data is not None
+    assert data["status"] == "candidate"
+    assert data["hit_count"] == 4  # hit_count 是纯复现次数，不受 is_successful 影响
+    assert data["confidence"] == pytest.approx(update_confidence(0.5, hit=False))
+    assert data["confidence"] == pytest.approx(0.5 + MISS_DELTA)
+
+
+# ---- 场景 8：只有 1 轮对话、没有下一轮反馈，episode 完全不处理，游标也不 release ----
+
+
+def test_only_last_turn_without_lookahead_is_not_processed(isolated_env, monkeypatch):
+    session_id = "sess-8"
+    records = [
+        _user_record("u1", "随便问一下没有下文", "2026-07-30T10:00:00Z"),
+        _assistant_record("a1", "简单回复"),
+    ]
+    transcript_path = _write_jsonl(isolated_env, records)
+    for i in range(3):
+        _obs(session_id, f"2026-07-30T10:00:0{i + 1}Z")
+
+    fake_provider = _FakeProvider(
+        result={"id": "x", "task_type": "y", "steps": ["a"], "note": "", "is_successful": True}
+    )
+    monkeypatch.setattr(mine_procedures, "get_llm_provider", lambda: fake_provider)
+
+    _run_main(monkeypatch, session_id, transcript_path)
+
+    assert fake_provider.calls == []
+    assert procedure_store.list_procedures() == []
+
+    # 游标停在 processing、从未 release：紧接着再次 claim 应该被 stale 超时机制挡住
+    claimed, _cursor = procedure_store.try_claim_session(session_id, transcript_path)
+    assert claimed is False
+
+
+# ---- 场景 9：多轮对话时最后一轮被留到下次处理，游标 release 到倒数第二轮 ----
+
+
+def test_multi_turn_only_last_turn_held_back(isolated_env, monkeypatch):
+    session_id = "sess-9"
+    records = [
+        _user_record("u1", "第一个任务", "2026-07-30T10:00:00Z"),
+        _assistant_record("a1", "完成了第一个任务"),
+        _user_record("u2", "第二个任务", "2026-07-30T10:05:00Z"),
+        _assistant_record("a2", "完成了第二个任务"),
+        _user_record("u3", "第三个任务，还没有下文", "2026-07-30T10:10:00Z"),
+        _assistant_record("a3", "完成了第三个任务"),
+    ]
+    transcript_path = _write_jsonl(isolated_env, records)
+    # episode0: [10:00:00, 10:05:00)
+    for i in range(3):
+        _obs(session_id, f"2026-07-30T10:00:0{i + 1}Z")
+    # episode1: [10:05:00, 10:10:00)
+    for i in range(3):
+        _obs(session_id, f"2026-07-30T10:05:0{i + 1}Z")
+
+    fake_provider = _FakeProvider(
+        results_by_assistant={
+            "完成了第一个任务": {
+                "id": "proc-1",
+                "task_type": "第一类任务",
+                "steps": ["步骤1"],
+                "note": "",
+                "is_successful": True,
+            },
+            "完成了第二个任务": {
+                "id": "proc-2",
+                "task_type": "第二类任务",
+                "steps": ["步骤1"],
+                "note": "",
+                "is_successful": True,
+            },
+        }
+    )
+    monkeypatch.setattr(mine_procedures, "get_llm_provider", lambda: fake_provider)
+
+    _run_main(monkeypatch, session_id, transcript_path)
+
+    # episode0(反馈=u2) 和 episode1(反馈=u3) 被处理，episode2(u3，无下文)不处理
+    assert len(fake_provider.calls) == 2
+
+    claimed, cursor = procedure_store.try_claim_session(session_id, transcript_path)
+    assert claimed is True
+    assert cursor == "u2"  # release 到 new_turns[-2]["uuid"]，不是最后一轮 u3
+
+
+# ---- 场景 10：命中已 deprecated 的 procedure 时复活为 candidate，skill_asked 重置 ----
+
+
+def test_deprecated_procedure_revives_on_hit(isolated_env, monkeypatch):
+    session_id = "sess-10"
+    procedure_store.write_procedure(
+        "task-html-doc",
+        {
+            "task_type": "写文档转html",
+            "hit_count": 2,
+            "confidence": 0.5,
+            "status": "deprecated",
+            "skill_asked": True,
+            "first_seen": "2026-07-01",
+            "last_seen": "2026-07-01",
+            "evidence_sessions": ["sess-old"],
+        },
+        "## 步骤\n1. 写md\n2. 转html",
+    )
+    records = [
+        _user_record("u1", "帮我把md文档转成html", "2026-07-30T10:00:00Z"),
+        _assistant_record("a1", "写了一份md文档并转成了html"),
+        _user_record("u2", "好的谢谢", "2026-07-30T10:05:00Z"),
+        _assistant_record("a2", "不客气"),
+    ]
+    transcript_path = _write_jsonl(isolated_env, records)
+    for i in range(3):
+        _obs(session_id, f"2026-07-30T10:00:0{i + 1}Z")
+
+    fake_provider = _FakeProvider(
+        result={
+            "id": "some-other-id",
+            "task_type": "写文档转html",
+            "steps": ["写md", "转html"],
+            "note": "",
+            "is_successful": True,
+        }
+    )
+    monkeypatch.setattr(mine_procedures, "get_llm_provider", lambda: fake_provider)
+
+    _run_main(monkeypatch, session_id, transcript_path)
+
+    data = procedure_store.read_procedure("task-html-doc")
+    assert data is not None
+    assert data["status"] == "candidate"  # 从 deprecated 复活为 candidate
+    assert data["skill_asked"] is False  # 情况变了，值得再问一次
+    assert data["hit_count"] == 3
+    # confidence 起点选在 0.5，命中一次后 0.55 仍低于 PROMOTE_THRESHOLD(0.7)，避免晋升歧义
+    assert data["confidence"] == pytest.approx(0.55)

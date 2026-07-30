@@ -159,3 +159,31 @@ sequenceDiagram
 - procedure 数量增长后的归档/清理策略（参照现有 instinct 的 `archive/` 惯例，后续按需补）。
 - `SKILL.md` 生成的具体质量校验/预览确认环节（比如生成后是否要再给用户看一眼再落盘）——本轮先跑通"问→转"的最简闭环。
 - 跨项目共享 procedure（当前跟 instinct/memory 一样是项目级隔离）。
+
+## 7. 修订：正确性信号（2026-07-30 补）
+
+**问题**：最初版本里，`hit_count`/`confidence` 只反映"这个流程复现了几次"，从不判断"这次复现的结果是否真的有效"——一个反复被模型给出但实际没解决问题的流程，一样会被无脑加分直至晋升。需要把"复现频率"和"是否正确"分开衡量。
+
+**方案**：两层信号，自动层做主判断，人工层兜底纠错。
+
+**自动层——用下一轮用户反馈判断本次复现是否成功**：
+- `transcript.py` 解析出的每轮数据里，`new_turns[i+1]["user"]`（下一轮真实用户消息文本）本身就是现成数据，不需要新采集。
+- `mine_procedures.py` 每处理一个 episode（`new_turns[i]`），必须已经存在 `new_turns[i+1]` 才处理——**episode 处理范围从"全部轮次"收窄为 `range(len(new_turns) - 1)`**，因为最后一轮还没有下一轮反馈，无法判断这次是否成功，本次 Stop 先不处理，留到下次 Stop（届时会有新的下一轮出现）再处理。
+- 相应地，`len(new_turns) < 2` 时不 release（游标停在 processing，跟 `summarize.py` 未达阈值时的"不 release、留到下次累积"是同一处理哲学）；`len(new_turns) >= 2` 时，release 到 `new_turns[-2]["uuid"]`（不是 `new_turns[-1]`，最后一轮留到下次连着它的下一轮一起判断）。
+- `provider.mine_procedure(steps_summary, assistant_text, next_user_feedback)` 新增第三个参数，LLM 结合"下一轮用户是否在纠正/拒绝这个方案"判断输出 `is_successful: true/false`（无法判断时默认 `true`，不误伤）。
+- `confidence = update_confidence(existing.get("confidence", INITIAL_CONFIDENCE), hit=is_successful)`——不成功时真的会扣分（复用 `confidence.py` 现成的 `MISS_DELTA` 逻辑，之前从未被调用过）。`hit_count` 不变语义，仍是纯复现次数计数器，跟 `confidence`（复现质量）分开。
+
+**人工层兜底——转 Skill 确认时一并问"这个流程对不对"**：
+- `notify_pending_procedures.py` 的提示文案追加一问：流程是否正确/有效。
+- 用户确认"不正确"：Claude 把该 procedure 的 `status` 改成 `deprecated`（不执行转 Skill），跟现有 instinct 的 `deprecated` 字段语义一致。
+- **deprecated 可复活**：跟 instinct 现有逻辑对齐（`extract.py` 里命中已 deprecated 的 instinct 会重新置 `deprecated=False`）——`deprecated` 的 procedure 如果后续又被 `find_similar_procedure` 命中，视同 `candidate` 重新参与晋升判断，且 `skill_asked` 重置为 `False`（情况变了，值得再问一次）。
+
+改动文件（在原改动清单基础上追加）：
+
+| 文件 | 改动类型 | 说明 |
+|---|---|---|
+| `memory_lib/providers/llm.py` | 改 | `mine_procedure` 加第三参数 `next_user_feedback`，输出加 `is_successful` |
+| `hooks/mine_procedures.py` | 改 | episode 范围收窄到 `range(len(new_turns)-1)`；游标 release 逻辑改为条件推进；confidence 计算改用 `is_successful` |
+| `hooks/notify_pending_procedures.py` | 改 | 提示文案追加"是否正确"确认 + deprecate 指引 |
+| `tests/test_mine_procedures.py` | 改 | 场景改造以覆盖新的 episode 边界/游标条件推进/成功失败两种 confidence 分支 |
+| `tests/test_notify_pending_procedures.py` | 改 | 断言追加的提示文案 |

@@ -1,16 +1,16 @@
 ---
-confidence: 0.5
+confidence: 0.6000000000000001
 deprecated: false
 domain: workflow
-hit_count: 1
+hit_count: 3
 id: read-before-write-pattern
-last_seen: '2026-07-29'
+last_seen: '2026-07-30'
 scope: personal
-trigger: 在修改或生成文档前，先读取相关源文件（如代码、现有文档）
+trigger: 修改代码前先读取相关文件内容
 ---
 
 ## Action
-先读取关键源文件获取最新状态，再执行写入或生成操作
+在编辑文件前，先读取文件内容以了解上下文
 
 ## Evidence
-本次会话中，在生成 artifact 文档前，先读取了 project-summary.md、recall.py、providers/__init__.py 等文件
+会话中有5次Read操作，且集中在编辑前读取测试文件和源文件

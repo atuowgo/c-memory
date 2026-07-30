@@ -38,6 +38,9 @@ def test_pending_procedure_is_printed_and_marked_asked(isolated_store, monkeypat
     assert "调试测试失败" in out
     assert "3" in out
     assert "memory/procedures/proc-a.md" in out
+    # 提示文案须追加"是否正确/有效"确认要求 + deprecate 指引（设计文档第7节修订）
+    assert "正确" in out
+    assert "deprecated" in out
 
     data = procedure_store.read_procedure("proc-a")
     assert data["skill_asked"] is True

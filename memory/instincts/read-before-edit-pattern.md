@@ -2,15 +2,15 @@
 confidence: 0.9
 deprecated: false
 domain: workflow
-hit_count: 10
+hit_count: 11
 id: read-before-edit-pattern
 last_seen: '2026-07-30'
 scope: personal
-trigger: 用户在执行代码变更前，先通过 Read 工具核实代码内容，而不是仅依赖子代理报告
+trigger: 修改代码或文档前
 ---
 
 ## Action
-在建议修改代码前，先主动读取相关文件内容，确保理解当前状态
+先读取相关文件内容，了解上下文后再进行编辑
 
 ## Evidence
-用户明确说'每一步都经过我本人 Read 实际代码核实（不只看子代理报告）'，且会话中有 Read 操作记录
+Read 操作 9 次，Edit 操作 4 次，且 Read 发生在 Edit 之前

@@ -29,10 +29,16 @@ class LLMProvider(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def mine_procedure(self, steps_summary: str, assistant_text: str) -> dict | None:
+    def mine_procedure(
+        self, steps_summary: str, assistant_text: str, next_user_feedback: str = ""
+    ) -> dict | None:
         """分析一段有序工具调用摘要 + 该轮 assistant 文本，判断是否构成可复用的多步骤流程。
-        是则返回 {"id": ..., "task_type": ..., "steps": [...], "note": ...}；
-        不是（比如零散调试、单一动作）则返回 None。"""
+        next_user_feedback 是下一轮真实用户消息文本，用于判断这次流程复现是否被用户
+        纠正/拒绝（可能为空字符串，比如还没有下一轮数据）。
+        是则返回 {"id": ..., "task_type": ..., "steps": [...], "note": ...,
+        "is_successful": ...}，其中 is_successful 表示结合下一轮用户反馈判断出的
+        "这次流程复现是否成功"（True=成功/无法判断时默认成功，False=被用户纠正/拒绝）；
+        不是流程（比如零散调试、单一动作）则返回 None。"""
         raise NotImplementedError
 
 
@@ -101,13 +107,20 @@ _MINE_PROCEDURE_SYSTEM_PROMPT = """你是一个流程挖掘专家。给你一段
 - 只有当这段操作「有明确目的」「由多个步骤组合而成」「未来同类任务大概率会重复用到」时，才判定为是流程。
 - 单次调试、零散尝试、试错性质的操作，或只有 1-2 个实质性动作的琐碎操作，一律判定为不是流程。
 
+除了判断是否构成流程，你还会收到"下一轮用户反馈"（这次流程执行完之后，用户实际说的下一句话），
+请结合它判断这次流程复现是否「成功」：
+- 如果下一轮用户反馈是在纠正/拒绝这次方案、指出问题、要求重做，说明这次不成功（is_successful: false）。
+- 如果用户正常继续对话、表示认可、或没有提出异议，说明这次成功（is_successful: true）。
+- 如果没有下一轮反馈信息可参考（比如为空），默认判定为成功（is_successful: true），不要误伤。
+
 如果是流程，严格按以下 JSON 格式输出，不要输出任何其他文字：
 {
   "is_procedure": true,
   "id": "md-doc-with-mermaid-to-html",
   "task_type": "一句话描述这类任务",
   "steps": ["步骤1描述", "步骤2描述", "..."],
-  "note": "可选，为什么要这么做的补充说明，没有则空字符串"
+  "note": "可选，为什么要这么做的补充说明，没有则空字符串",
+  "is_successful": true
 }
 
 其中 id 是 kebab-case 英文唯一标识。
@@ -203,14 +216,17 @@ class DeepSeekProvider(LLMProvider):
 
         return content.strip()
 
-    def mine_procedure(self, steps_summary: str, assistant_text: str) -> dict | None:
+    def mine_procedure(
+        self, steps_summary: str, assistant_text: str, next_user_feedback: str = ""
+    ) -> dict | None:
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
         user_content = (
             f"## 本轮 assistant 说明\n\n{assistant_text or '(无)'}\n\n"
-            f"## 本轮有序工具调用序列\n\n{steps_summary}"
+            f"## 本轮有序工具调用序列\n\n{steps_summary}\n\n"
+            f"## 下一轮用户反馈（用于判断这次流程是否成功）\n\n{next_user_feedback or '(无)'}"
         )
         payload = {
             "model": self.model,
@@ -247,6 +263,7 @@ class DeepSeekProvider(LLMProvider):
             "task_type": result.get("task_type", ""),
             "steps": result.get("steps") or [],
             "note": result.get("note", ""),
+            "is_successful": bool(result.get("is_successful", True)),
         }
 
 
@@ -280,7 +297,9 @@ class NullProvider(LLMProvider):
         # 无 API key 时不做真正总结，原样返回旧总结——至少不丢已有内容，也绝不抛异常。
         return previous_summary
 
-    def mine_procedure(self, steps_summary: str, assistant_text: str) -> dict | None:
+    def mine_procedure(
+        self, steps_summary: str, assistant_text: str, next_user_feedback: str = ""
+    ) -> dict | None:
         # 流程挖掘是语义判断（"这段操作是否值得记住"），规则匹配识别不出来，
         # 没有 LLM 配置时干脆不挖掘，不用规则瞎猜。
         return None

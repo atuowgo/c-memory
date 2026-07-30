@@ -100,14 +100,21 @@ def main() -> None:
         procedure_store.release_session(session_id, after_uuid)
         return
 
+    if len(new_turns) < 2:
+        # 一轮都凑不出"当前轮+下一轮反馈"，没有任何 episode 可处理。不 release，
+        # 游标停在 processing，跟 try_claim_session 的 stale 超时机制配合，下次自然重试。
+        return
+
     promoted_this_run: list[tuple[str, str, int]] = []
 
     try:
         provider = get_llm_provider()
 
-        for i, turn in enumerate(new_turns):
+        for i in range(len(new_turns) - 1):
+            turn = new_turns[i]
+            next_user_feedback = new_turns[i + 1]["user"]
             ts_start = turn["ts"]
-            ts_end = new_turns[i + 1]["ts"] if i + 1 < len(new_turns) else None
+            ts_end = new_turns[i + 1]["ts"]
 
             observations = observation_store.list_session_observations_in_range(session_id, ts_start, ts_end)
             if len(observations) < _MIN_OBSERVATIONS_PER_EPISODE:
@@ -116,7 +123,7 @@ def main() -> None:
             steps_summary = _build_steps_summary(observations)
 
             try:
-                result = provider.mine_procedure(steps_summary, turn["assistant"])
+                result = provider.mine_procedure(steps_summary, turn["assistant"], next_user_feedback)
             except LLMProviderError as exc:
                 print(f"mine_procedures.py: LLM 流程挖掘失败，跳过该 episode: {exc!r}", file=sys.stderr)
                 continue
@@ -134,29 +141,33 @@ def main() -> None:
             today = date.today().isoformat()
             existing = find_similar_procedure(task_type, procedure_store.list_procedures())
 
+            is_successful = bool(result.get("is_successful", True))
+            prior_confidence = (
+                existing.get("confidence", INITIAL_CONFIDENCE) if existing is not None else INITIAL_CONFIDENCE
+            )
+            confidence = update_confidence(prior_confidence, hit=is_successful)
+
             if existing is not None:
                 procedure_id = existing["id"]
                 hit_count = existing.get("hit_count", 0) + 1
-                confidence = update_confidence(existing.get("confidence", INITIAL_CONFIDENCE), hit=True)
-                was_candidate = existing.get("status") != "promoted"
                 evidence_sessions = list(existing.get("evidence_sessions") or [])
                 if session_id not in evidence_sessions:
                     evidence_sessions.append(session_id)
-                status = "promoted" if (was_candidate and confidence >= PROMOTE_THRESHOLD) else existing.get(
-                    "status", "candidate"
-                )
-                just_promoted = was_candidate and status == "promoted"
-                skill_asked = existing.get("skill_asked", False)
                 first_seen = existing.get("first_seen", today)
             else:
                 procedure_id = _sanitize_id(result.get("id"), task_type)
                 hit_count = 1
-                confidence = INITIAL_CONFIDENCE
-                status = "candidate"
-                just_promoted = False
-                skill_asked = False
                 evidence_sessions = [session_id]
                 first_seen = today
+
+            prior_status = existing.get("status", "candidate") if existing is not None else "candidate"
+            promotable_prior_status = "candidate" if prior_status == "deprecated" else prior_status
+            was_candidate = promotable_prior_status != "promoted"
+            status = "promoted" if (was_candidate and confidence >= PROMOTE_THRESHOLD) else promotable_prior_status
+            just_promoted = was_candidate and status == "promoted"
+            skill_asked = (
+                False if prior_status == "deprecated" else (existing.get("skill_asked", False) if existing is not None else False)
+            )
 
             body = "## 步骤\n" + "\n".join(
                 f"{i + 1}. {s}" for i, s in enumerate(result.get("steps") or [])
@@ -187,9 +198,9 @@ def main() -> None:
             ]
             print(json.dumps({"systemMessage": "\n".join(lines)}, ensure_ascii=False))
     finally:
-        # 无条件推进游标：跟 extract.py 一致的哲学——流程模式会反复出现，
-        # 单次处理失败也丢得起，不需要像 summarize.py 那样保守地只在成功时才推进。
-        procedure_store.release_session(session_id, new_turns[-1]["uuid"])
+        # release 到 new_turns[-2] 而不是 new_turns[-1]：最后一轮还没有下一轮反馈可看，
+        # 不能被跳过，要留给下一次 Stop（届时会出现新的下一轮）连着一起处理。
+        procedure_store.release_session(session_id, new_turns[-2]["uuid"])
 
 
 if __name__ == "__main__":

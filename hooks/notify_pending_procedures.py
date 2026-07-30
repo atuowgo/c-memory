@@ -35,7 +35,9 @@ def _format_prompt(proc: dict) -> str:
         "[procedure-pending]\n"
         f"检测到流程「{task_type}」已稳定复现 {hit_count} 次"
         f"（memory/procedures/{procedure_id}.md），\n"
-        "请先询问用户是否要转换为 Skill，用户确认后再执行转换，不要自作主张直接转。"
+        "请先询问用户：1) 这个流程实际上是否正确/有效；2) 是否要转换为 Skill。\n"
+        "若用户反馈流程不正确，请把该 procedure 文件的 status 改为 deprecated（不要转成 Skill）；\n"
+        "用户确认流程正确且要转换，再执行转换；不要自作主张直接转。"
     )
 
 
