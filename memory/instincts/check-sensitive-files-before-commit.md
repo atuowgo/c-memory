@@ -1,16 +1,16 @@
 ---
-confidence: 0.5
+confidence: 0.55
 deprecated: false
 domain: git
-hit_count: 1
+hit_count: 2
 id: check-sensitive-files-before-commit
 last_seen: '2026-07-30'
 scope: personal
-trigger: 在 git add 之后、git commit 之前，检查是否误包含 .env 或 sqlite 等敏感文件
+trigger: 执行 git add 后、提交前
 ---
 
 ## Action
-在 git add 后自动执行 grep 检查敏感文件模式，确认无敏感文件后再提交
+检查暂存区是否包含 .env 或 .sqlite3 等敏感文件
 
 ## Evidence
-用户执行了 'rtk git add -A && rtk git status --short | grep -iE "\\.env$|sqlite"; echo "sensitive-check-done"'
+使用 grep -iE '\.env$|\.sqlite3$' 检查敏感文件

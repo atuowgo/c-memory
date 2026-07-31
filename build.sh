@@ -48,5 +48,18 @@ echo "-- 拷贝首次使用安装脚本：install.sh"
 cp scripts/install.sh "$PACKAGE_DIR/install.sh"
 chmod +x "$PACKAGE_DIR/install.sh"
 
+echo "-- 生成 .gitignore：忽略 install.sh/hooks 运行时在本子目录里产生的内容"
+# 目标项目通常自己有 git 仓库，.c-memory/ 作为自包含子目录整体拷进去后，
+# install.sh 建的 .venv、运行时生成的 memory/ 数据、.env（含真实密钥）都不该
+# 被目标项目提交；__pycache__ 是 hooks/、memory_lib/ 里的 .py 文件被 Python
+# 导入执行时自动生成的字节码缓存，同样不该入库。
+cat > "$PACKAGE_DIR/.gitignore" <<'EOF'
+.venv/
+memory/
+.env
+__pycache__/
+*.pyc
+EOF
+
 echo "== 构建完成，产物清单 =="
 find "$PACKAGE_DIR" -type f | sort

@@ -60,7 +60,7 @@ flowchart TD
     CreateFresh --> Done["安装完成"]
     MergeIn --> Done
 
-    Done --> Ready["下次在目标项目里打开 Claude Code<br/>5 个 Hook 自动生效，全部指向 c-memory 子目录内的 .venv/hooks"]
+    Done --> Ready["下次在目标项目里打开 Claude Code<br/>6 个 Hook 自动生效，全部指向 c-memory 子目录内的 .venv/hooks"]
 ```
 
 ## 3. 执行步骤（命令）
@@ -76,11 +76,13 @@ cd /path/to/c-memory
 
 ```
 dist/.c-memory/
-├── hooks/{observe,extract,inject,summarize}.py
+├── hooks/{observe,extract,inject,summarize,mine_procedures,notify_pending_procedures}.py
 ├── memory_lib/**/*.py
 ├── settings.template.json      # 不叫 .claude/settings.json，避免覆盖目标项目已有配置
 ├── merge_settings.py           # install.sh 用它做真正的合并
 ├── install.sh
+├── .gitignore                  # 忽略本子目录运行时产物：.venv/、memory/、.env、__pycache__/、*.pyc，
+│                                # 避免目标项目把 c-memory 的 .venv/运行数据/密钥提交进自己的仓库
 ├── .env.example
 ├── requirements.txt
 └── README.md
@@ -122,7 +124,7 @@ PYTHON_BIN=/opt/homebrew/bin/python3 ./install.sh
 
 ```bash
 cd /path/to/target-project
-cat .claude/settings.json        # 确认 PostToolUse/Stop/PreCompact/SessionEnd/SessionStart 都在，
+cat .claude/settings.json        # 确认 PostToolUse/Stop/PreCompact/SessionEnd/SessionStart/UserPromptSubmit 都在，
                                   # 且 command 里带着 .c-memory/（或你重命名后的子目录名）前缀
 ls .c-memory/memory/             # 确认 instincts/ memories/ rules/ 目录已建好（子目录内）
 cat .c-memory/.env               # 确认变量都是可选的，未填也能跑（降级为规则+TF-IDF）
