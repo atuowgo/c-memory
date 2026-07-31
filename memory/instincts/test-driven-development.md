@@ -1,16 +1,16 @@
 ---
-confidence: 0.5
+confidence: 0.55
 deprecated: false
 domain: testing
-hit_count: 1
+hit_count: 2
 id: test-driven-development
-last_seen: '2026-07-30'
+last_seen: '2026-07-31'
 scope: personal
-trigger: 实现功能后运行测试验证
+trigger: 实现新功能或修改代码时
 ---
 
 ## Action
-在完成代码修改后，运行相关测试确保通过
+先编写或更新测试，再实现功能，并运行测试验证
 
 ## Evidence
-会话中7次Bash操作中有多次运行pytest测试，最终107个测试全部通过
+先写 test_record_session.py，再实现 hooks/record_session.py，并通过测试驱动修改

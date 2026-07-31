@@ -26,6 +26,8 @@ dist/
 # 用通配符而非逐个列名，避免以后每加一个 SQLite 缓存/状态文件都要手动改这里
 memory/.*.sqlite3
 memory/.dedup_state.json
+memory/.recent-sessions.json
+memory/recent-sessions.md
 
 # 系统/编辑器
 .DS_Store

@@ -1,16 +1,16 @@
 ---
-confidence: 0.5
+confidence: 0.55
 deprecated: false
 domain: workflow
-hit_count: 1
+hit_count: 2
 id: parallel-subagent-launch
-last_seen: '2026-07-29'
+last_seen: '2026-07-31'
 scope: personal
-trigger: 需要实现多个独立模块时
+trigger: 需要实现新模块或功能时
 ---
 
 ## Action
-并行启动多个子agent，每个负责一个模块的实现，并等待所有完成后再进行依赖检查
+将实现任务委托给 subagent，并明确仓库路径、任务描述和测试要求
 
 ## Evidence
-Phase 1的三个subagent（transcript.py、transcript_store.py、llm.py）被并行启动，且用户明确表示跑完核对结果再启动依赖的Phase 2
+调用 Agent 实现 hooks/record_session.py 及测试
