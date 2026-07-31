@@ -1,6 +1,6 @@
 ---
 created: '2026-07-31'
-description: 项目使用rtk作为git命令的包装器
+description: 项目使用 rtk 作为 git 命令的包装器
 id: uses-rtk-git-wrapper
 keywords:
 - rtk
@@ -8,4 +8,4 @@ keywords:
 type: project
 ---
 
-在项目中使用`rtk git`而不是直接使用`git`，可能是为了集成额外的功能或权限控制。所有git操作都应通过rtk执行。
+在 Bash 命令中，git 命令通过 rtk 前缀调用（如 rtk git status），表明项目环境配置了 rtk 工具来包装 git 命令，可能用于增强或记录 git 操作。

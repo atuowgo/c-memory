@@ -857,27 +857,42 @@ sequenceDiagram
     <section id="providers">
       <h2><span class="num">11</span> Provider 降级矩阵</h2>
       <p class="purpose">阅读目的：确认没有配置任何 API Key 时三条管线是否还能跑通（能，只是精度打折，流程挖掘会整个停摆而非降级——见下方 <code>NullProvider</code> 说明）。</p>
+      <div class="callout win">
+        <strong>2026-07-31：LLM/Embedding 都改成显式选型，不再靠"哪个 key 非空"自动探测</strong>
+        原来是"<code>DEEPSEEK_API_KEY</code> 非空就用 DeepSeek"/"<code>ARK_API_KEY</code> 非空就探活用 Ark"，只支持各一家。
+        现在新增 <code>LLM_PROVIDER=deepseek|openai|anthropic</code> 和 <code>EMBEDDING_PROVIDER=ark|openai|tfidf</code> 两个环境变量显式指定用哪个，
+        没设置/填了不认识的值/对应 <code>{PREFIX}_API_KEY</code> 为空都统一降级到兜底 Provider——挪到别的环境只需要改这一个变量，不用改代码。
+        三个 LLM Provider（DeepSeek/OpenAI/Anthropic）和两个真实 Embedding Provider（Ark/OpenAI 兼容）都统一成
+        <code>model</code>/<code>base_url</code>/<code>api_key</code> 三参数可配置形态。
+      </div>
       <div class="card-grid">
         <div class="card">
           <h4>LLM：<code>get_llm_provider()</code></h4>
-          <p><code>DEEPSEEK_API_KEY</code> 非空 → <code>DeepSeekProvider</code>（OpenAI 兼容 <code>/chat/completions</code>，10s 超时）。
-          否则 → <code>NullProvider</code>：不发请求，只用 <code>\b</code> 词边界正则匹配 pnpm/npm/yarn，只能产出 <code>project_facts</code>。</p>
+          <p><code>LLM_PROVIDER=deepseek</code> → <code>DeepSeekProvider</code>，<code>=openai</code> → <code>OpenAIProvider</code>——
+          两者都继承同一个 <code>_OpenAICompatibleProvider</code> 私有基类（<code>/chat/completions</code>，<code>Authorization: Bearer</code>，
+          <code>response_format:{"type":"json_object"}</code> 强制 JSON，10s 超时），只是 <code>ENV_PREFIX</code>/默认 <code>base_url</code>/默认
+          <code>model</code> 不同。<code>=anthropic</code> → <code>AnthropicProvider</code>，独立实现（<code>/v1/messages</code>，
+          <code>x-api-key</code> 不是 Bearer，<code>system</code> 是顶层参数不在 messages 里，<code>max_tokens</code> 必填，响应解析走
+          <code>content[0].text</code> 不是 <code>choices[0].message.content</code>，且没有等价的强制 JSON 参数，靠 prompt 指令保证格式）。
+          未设置/不识别/对应 key 为空 → <code>NullProvider</code>：不发请求，只用 <code>\b</code> 词边界正则匹配 pnpm/npm/yarn，只能产出 <code>project_facts</code>。</p>
         </div>
         <div class="card">
           <h4>LLM 第二能力：<code>summarize_conversation()</code></h4>
-          <p><code>DeepSeekProvider</code> 失败时<strong>抛异常</strong>（不是静默返回空串）——让 <code>summarize.py</code> 能感知失败、
+          <p>三个真实 Provider 失败时都<strong>抛异常</strong>（不是静默返回空串）——让 <code>summarize.py</code> 能感知失败、
           不推进 cursor。<code>NullProvider</code> 原样返回 <code>previous_summary</code>：没有真正总结能力，但至少不丢已有总结。</p>
         </div>
         <div class="card">
-          <h4>LLM 第三能力：<code>mine_procedure()</code>（新增）</h4>
-          <p><code>DeepSeekProvider</code> 同样是请求/解析失败抛异常，由 <code>mine_procedures.py</code> 逐 episode 兜底、不中断整批。
+          <h4>LLM 第三能力：<code>mine_procedure()</code></h4>
+          <p>三个真实 Provider 同样是请求/解析失败抛异常，由 <code>mine_procedures.py</code> 逐 episode 兜底、不中断整批。
           <code>NullProvider</code> 恒返回 <code>None</code>——流程挖掘是纯语义判断，规则匹配识别不出"这段操作是否值得记住"，没有 LLM 时干脆不挖掘。</p>
         </div>
         <div class="card">
           <h4>Embedding：<code>get_embedding_provider()</code></h4>
-          <p><code>ARK_API_KEY</code> 非空时先探活（<code>embed(["ping"])</code>，5s 超时），成功 → <code>ArkProvider</code>
-          （<code>SUPPORTS_CACHE=True</code>，走 sqlite-vec 缓存）；探活失败或未配置 → <code>TfidfProvider</code>
-          （本地 sklearn，每次现场 fit，不缓存）。</p>
+          <p><code>EMBEDDING_PROVIDER=ark</code> → 沿用原有探活逻辑（<code>embed(["ping"])</code>，5s 超时，失败也降级），
+          成功用 <code>ArkProvider</code>（逐条请求，<code>SUPPORTS_CACHE=True</code>，走 sqlite-vec 缓存）。
+          <code>=openai</code> → <code>OpenAIProvider</code>（embedding 版，兼容 <code>/embeddings</code> 接口、不限定官方 OpenAI，
+          一次请求批量传入整批文本、按响应里的 <code>index</code> 排序取值，不像 Ark 逐条循环），不探活，只检查 key 非空即用。
+          未设置/不识别/对应 key 为空 → <code>TfidfProvider</code>（本地 sklearn，每次现场 fit，不缓存）。</p>
         </div>
       </div>
     </section>

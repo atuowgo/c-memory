@@ -129,15 +129,19 @@ _MINE_PROCEDURE_SYSTEM_PROMPT = """你是一个流程挖掘专家。给你一段
 {"is_procedure": false}"""
 
 
-class DeepSeekProvider(LLMProvider):
-    """DeepSeek（OpenAI 兼容接口）LLM Provider。"""
+class _OpenAICompatibleProvider(LLMProvider):
+    """OpenAI 兼容接口（`/chat/completions`，`Authorization: Bearer`，
+    `response_format:{"type":"json_object"}` 强制 JSON）的共用请求逻辑。
+    子类需设置类属性 ENV_PREFIX/DEFAULT_BASE_URL/DEFAULT_MODEL。"""
 
-    API_URL = "https://api.deepseek.com/chat/completions"
     TIMEOUT_SECONDS = 10
 
     def __init__(self) -> None:
-        self.api_key = os.environ.get("DEEPSEEK_API_KEY", "")
-        self.model = os.environ.get("LLM_MODEL", "deepseek-chat")
+        self.api_key = os.environ.get(f"{self.ENV_PREFIX}_API_KEY", "")
+        self.base_url = (
+            os.environ.get(f"{self.ENV_PREFIX}_BASE_URL", "").strip() or self.DEFAULT_BASE_URL
+        )
+        self.model = os.environ.get(f"{self.ENV_PREFIX}_MODEL", "").strip() or self.DEFAULT_MODEL
 
     def analyze(self, observations_summary: str, last_message: str = "") -> dict:
         headers = {
@@ -159,21 +163,21 @@ class DeepSeekProvider(LLMProvider):
         }
         try:
             resp = requests.post(
-                self.API_URL,
+                f"{self.base_url}/chat/completions",
                 headers=headers,
                 json=payload,
                 timeout=self.TIMEOUT_SECONDS,
             )
             resp.raise_for_status()
         except requests.RequestException as exc:
-            raise LLMProviderError(f"DeepSeek API 请求失败: {exc}") from exc
+            raise LLMProviderError(f"{self.ENV_PREFIX} API 请求失败: {exc}") from exc
 
         try:
             data = resp.json()
             content = data["choices"][0]["message"]["content"]
             result = json.loads(content)
         except (KeyError, IndexError, ValueError) as exc:
-            raise LLMProviderError(f"DeepSeek API 响应解析失败: {exc}") from exc
+            raise LLMProviderError(f"{self.ENV_PREFIX} API 响应解析失败: {exc}") from exc
 
         return {
             "instincts": result.get("instincts", []),
@@ -199,20 +203,20 @@ class DeepSeekProvider(LLMProvider):
         }
         try:
             resp = requests.post(
-                self.API_URL,
+                f"{self.base_url}/chat/completions",
                 headers=headers,
                 json=payload,
                 timeout=self.TIMEOUT_SECONDS,
             )
             resp.raise_for_status()
         except requests.RequestException as exc:
-            raise LLMProviderError(f"DeepSeek API 请求失败: {exc}") from exc
+            raise LLMProviderError(f"{self.ENV_PREFIX} API 请求失败: {exc}") from exc
 
         try:
             data = resp.json()
             content = data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, ValueError) as exc:
-            raise LLMProviderError(f"DeepSeek API 响应解析失败: {exc}") from exc
+            raise LLMProviderError(f"{self.ENV_PREFIX} API 响应解析失败: {exc}") from exc
 
         return content.strip()
 
@@ -239,21 +243,168 @@ class DeepSeekProvider(LLMProvider):
         }
         try:
             resp = requests.post(
-                self.API_URL,
+                f"{self.base_url}/chat/completions",
                 headers=headers,
                 json=payload,
                 timeout=self.TIMEOUT_SECONDS,
             )
             resp.raise_for_status()
         except requests.RequestException as exc:
-            raise LLMProviderError(f"DeepSeek API 请求失败: {exc}") from exc
+            raise LLMProviderError(f"{self.ENV_PREFIX} API 请求失败: {exc}") from exc
 
         try:
             data = resp.json()
             content = data["choices"][0]["message"]["content"]
             result = json.loads(content)
         except (KeyError, IndexError, ValueError) as exc:
-            raise LLMProviderError(f"DeepSeek API 响应解析失败: {exc}") from exc
+            raise LLMProviderError(f"{self.ENV_PREFIX} API 响应解析失败: {exc}") from exc
+
+        if result.get("is_procedure") is not True:
+            return None
+
+        return {
+            "id": result.get("id", ""),
+            "task_type": result.get("task_type", ""),
+            "steps": result.get("steps") or [],
+            "note": result.get("note", ""),
+            "is_successful": bool(result.get("is_successful", True)),
+        }
+
+
+class DeepSeekProvider(_OpenAICompatibleProvider):
+    """DeepSeek（OpenAI 兼容接口）LLM Provider。"""
+
+    ENV_PREFIX = "DEEPSEEK"
+    DEFAULT_BASE_URL = "https://api.deepseek.com"
+    DEFAULT_MODEL = "deepseek-chat"
+
+
+class OpenAIProvider(_OpenAICompatibleProvider):
+    """OpenAI Chat Completions API LLM Provider。"""
+
+    ENV_PREFIX = "OPENAI"
+    DEFAULT_BASE_URL = "https://api.openai.com/v1"
+    DEFAULT_MODEL = "gpt-4o-mini"
+
+
+class AnthropicProvider(LLMProvider):
+    """Anthropic Messages API LLM Provider（非 OpenAI 兼容接口，独立实现）。"""
+
+    API_PATH = "/v1/messages"
+    TIMEOUT_SECONDS = 10
+    MAX_TOKENS = 4096
+
+    def __init__(self) -> None:
+        self.api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        self.base_url = (
+            os.environ.get("ANTHROPIC_BASE_URL", "").strip() or "https://api.anthropic.com"
+        )
+        self.model = (
+            os.environ.get("ANTHROPIC_MODEL", "").strip() or "claude-haiku-4-5-20251001"
+        )
+
+    def _headers(self) -> dict:
+        return {
+            "x-api-key": self.api_key,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+        }
+
+    def analyze(self, observations_summary: str, last_message: str = "") -> dict:
+        user_content = (
+            f"## 最后一轮对话\n\n{last_message or '(无)'}\n\n"
+            f"## 本次会话的工具调用摘要\n\n{observations_summary}"
+        )
+        payload = {
+            "model": self.model,
+            "max_tokens": self.MAX_TOKENS,
+            "system": _SYSTEM_PROMPT,
+            "messages": [{"role": "user", "content": user_content}],
+        }
+        try:
+            resp = requests.post(
+                f"{self.base_url}{self.API_PATH}",
+                headers=self._headers(),
+                json=payload,
+                timeout=self.TIMEOUT_SECONDS,
+            )
+            resp.raise_for_status()
+        except requests.RequestException as exc:
+            raise LLMProviderError(f"Anthropic API 请求失败: {exc}") from exc
+
+        try:
+            data = resp.json()
+            content = data["content"][0]["text"]
+            result = json.loads(content)
+        except (KeyError, IndexError, ValueError) as exc:
+            raise LLMProviderError(f"Anthropic API 响应解析失败: {exc}") from exc
+
+        return {
+            "instincts": result.get("instincts", []),
+            "project_facts": result.get("project_facts", []),
+        }
+
+    def summarize_conversation(self, previous_summary: str, new_turns_text: str) -> str:
+        user_content = (
+            f"## 当前项目总结\n\n{previous_summary or '(无，这是第一次总结)'}\n\n"
+            f"## 新增对话\n\n{new_turns_text}"
+        )
+        payload = {
+            "model": self.model,
+            "max_tokens": self.MAX_TOKENS,
+            "system": _SUMMARY_SYSTEM_PROMPT,
+            "messages": [{"role": "user", "content": user_content}],
+        }
+        try:
+            resp = requests.post(
+                f"{self.base_url}{self.API_PATH}",
+                headers=self._headers(),
+                json=payload,
+                timeout=self.TIMEOUT_SECONDS,
+            )
+            resp.raise_for_status()
+        except requests.RequestException as exc:
+            raise LLMProviderError(f"Anthropic API 请求失败: {exc}") from exc
+
+        try:
+            data = resp.json()
+            content = data["content"][0]["text"]
+        except (KeyError, IndexError, ValueError) as exc:
+            raise LLMProviderError(f"Anthropic API 响应解析失败: {exc}") from exc
+
+        return content.strip()
+
+    def mine_procedure(
+        self, steps_summary: str, assistant_text: str, next_user_feedback: str = ""
+    ) -> dict | None:
+        user_content = (
+            f"## 本轮 assistant 说明\n\n{assistant_text or '(无)'}\n\n"
+            f"## 本轮有序工具调用序列\n\n{steps_summary}\n\n"
+            f"## 下一轮用户反馈（用于判断这次流程是否成功）\n\n{next_user_feedback or '(无)'}"
+        )
+        payload = {
+            "model": self.model,
+            "max_tokens": self.MAX_TOKENS,
+            "system": _MINE_PROCEDURE_SYSTEM_PROMPT,
+            "messages": [{"role": "user", "content": user_content}],
+        }
+        try:
+            resp = requests.post(
+                f"{self.base_url}{self.API_PATH}",
+                headers=self._headers(),
+                json=payload,
+                timeout=self.TIMEOUT_SECONDS,
+            )
+            resp.raise_for_status()
+        except requests.RequestException as exc:
+            raise LLMProviderError(f"Anthropic API 请求失败: {exc}") from exc
+
+        try:
+            data = resp.json()
+            content = data["content"][0]["text"]
+            result = json.loads(content)
+        except (KeyError, IndexError, ValueError) as exc:
+            raise LLMProviderError(f"Anthropic API 响应解析失败: {exc}") from exc
 
         if result.get("is_procedure") is not True:
             return None

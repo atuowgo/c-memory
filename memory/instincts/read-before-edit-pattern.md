@@ -2,15 +2,15 @@
 confidence: 0.9
 deprecated: false
 domain: workflow
-hit_count: 16
+hit_count: 17
 id: read-before-edit-pattern
 last_seen: '2026-07-31'
 scope: personal
-trigger: 即将编辑一个本次会话尚未 Read 过的文件
+trigger: 在编辑文件前先读取相关上下文（如 README、现有代码）
 ---
 
 ## Action
-先用 Read 工具读取该文件当前内容，再执行 Edit/Write
+先读取目标文件或相关文档，再执行编辑
 
 ## Evidence
-2/2 次编辑前有先 Read
+多次 Read 操作（llm.py、__init__.py、设计文档）和 Bash 查看 README 上下文后才进行 Edit

@@ -1,11 +1,11 @@
 ---
 created: '2026-07-31'
-description: 项目使用 pytest 进行测试，并通过 .venv 中的 Python 运行测试
+description: 项目使用 .venv 虚拟环境运行 Python 命令
 id: uses-python-venv
 keywords:
-- pytest
+- python
 - venv
 type: project
 ---
 
-项目根目录有 pytest.ini，测试通过 .venv/bin/python -m pytest 运行。测试文件位于 tests/ 目录。
+在 Bash 命令中使用 .venv/bin/python 执行脚本，表明项目依赖虚拟环境，应避免直接使用系统 Python。

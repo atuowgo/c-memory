@@ -74,6 +74,48 @@ class ArkProvider(EmbeddingProvider):
         return vectors
 
 
+class OpenAIProvider(EmbeddingProvider):
+    """兼容 OpenAI /embeddings 接口格式的通用 Provider，不限定官方 OpenAI，可指向任意中转/自建网关。"""
+
+    TIMEOUT_SECONDS = 10
+    SUPPORTS_CACHE = True
+
+    def __init__(self) -> None:
+        self.api_key = os.environ.get("OPENAI_EMBEDDING_API_KEY", "")
+        self.base_url = (
+            os.environ.get("OPENAI_EMBEDDING_BASE_URL", "").strip() or "https://api.openai.com/v1"
+        )
+        self.model = (
+            os.environ.get("OPENAI_EMBEDDING_MODEL", "").strip() or "text-embedding-3-small"
+        )
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {"model": self.model, "input": texts}
+        try:
+            resp = requests.post(
+                f"{self.base_url}/embeddings",
+                headers=headers,
+                json=payload,
+                timeout=self.TIMEOUT_SECONDS,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            # OpenAI 接口返回顺序理论上跟输入一致，但显式按 index 排序更保险，
+            # 不直接假设响应数组顺序已经对齐输入顺序。
+            items = sorted(data["data"], key=lambda item: item["index"])
+            return [item["embedding"] for item in items]
+        except requests.RequestException as exc:
+            raise EmbeddingProviderError(f"OpenAI embedding API 请求失败: {exc}") from exc
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            raise EmbeddingProviderError(f"OpenAI embedding API 响应解析失败: {exc}") from exc
+
+
 class TfidfProvider(EmbeddingProvider):
     """本地 sklearn TfidfVectorizer 兜底方案。
 
