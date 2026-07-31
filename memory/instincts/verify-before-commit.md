@@ -1,16 +1,16 @@
 ---
-confidence: 0.5
+confidence: 0.55
 deprecated: false
 domain: testing
-hit_count: 1
+hit_count: 2
 id: verify-before-commit
-last_seen: '2026-07-29'
+last_seen: '2026-07-31'
 scope: personal
-trigger: 完成功能实现后，准备提交代码前
+trigger: 完成代码修改后，准备提交前
 ---
 
 ## Action
-执行全量测试并手动构造端到端验证场景，确保功能正确且无污染残留
+运行测试套件确认所有测试通过，再考虑提交和推送
 
 ## Evidence
-完成77/77全量测试后，额外构造120轮合成对话跑完整链路验证
+最后一轮对话提到'113 个测试仍全绿'，表明用户或助手在修改后运行了测试并确认通过，然后才询问是否提交推送。

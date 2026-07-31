@@ -1,6 +1,6 @@
 ---
-created: '2026-07-30'
-description: 用户使用 rtk grep 工具进行代码搜索
+created: '2026-07-31'
+description: c-memory 项目使用 rtk grep 命令进行代码/文档搜索。
 id: uses-rtk-grep
 keywords:
 - rtk
@@ -8,4 +8,4 @@ keywords:
 type: project
 ---
 
-rtk grep 用于快速查找代码中的模式，如类定义等
+在修改文档时，使用了 'rtk grep -n' 来搜索特定字符串，说明项目环境中配置了 rtk 工具，且团队习惯用它进行快速搜索。

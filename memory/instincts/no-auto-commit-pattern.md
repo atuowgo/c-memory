@@ -2,7 +2,7 @@
 confidence: 0.9
 deprecated: false
 domain: git
-hit_count: 21
+hit_count: 24
 id: no-auto-commit-pattern
 last_seen: '2026-07-31'
 scope: personal

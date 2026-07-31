@@ -1,3 +1,4 @@
+<meta charset="utf-8">
 <title>c-memory 机制全览</title>
 <style>
   :root {
@@ -309,13 +310,15 @@
 <div class="layout">
   <nav class="toc" aria-label="目录">
     <div class="brand">c-memory</div>
-    <div class="brand-sub">机制全览 · 2026-07-29</div>
+    <div class="brand-sub">机制全览 · 2026-07-31</div>
     <ol>
       <li><a href="#overview">总体架构</a></li>
       <li><a href="#observe">观察 · observe.py</a></li>
       <li><a href="#extract">提炼 · extract.py</a></li>
       <li><a href="#inject">注入 · inject.py</a></li>
       <li><a href="#recap">情景记忆 · project-summary.md</a></li>
+      <li><a href="#procedure">流程挖掘 · mine_procedures.py</a></li>
+      <li><a href="#recent-sessions">最近会话记录 · record_session.py</a></li>
       <li><a href="#taxonomy">记忆分层与来源</a></li>
       <li><a href="#storage">存储层：文件 vs SQLite</a></li>
       <li><a href="#confidence">置信度演化</a></li>
@@ -330,22 +333,25 @@
     <div class="hero">
       <h1>c-memory：Claude Code 的个人记忆闭环</h1>
       <p class="lede">
-        两条独立管线并行运行：<strong>语义/程序性记忆闭环</strong>（观察 → 提炼 → 注入，把工具调用沉淀成带置信度的
-        行为习惯与项目事实）和<strong>情景记忆滚动总结</strong>（把对话本身滚动总结成"上次聊到哪了"，解决重开会话丢上下文的问题）。
+        三条独立管线并行运行：<strong>语义/程序性记忆闭环</strong>（观察 → 提炼 → 注入，把工具调用沉淀成带置信度的
+        行为习惯与项目事实）、<strong>情景记忆滚动总结</strong>（把对话本身滚动总结成"上次聊到哪了"，解决重开会话丢上下文的问题）、
+        以及<strong>流程挖掘</strong>（识别反复出现的多步骤操作序列，结合下一轮用户反馈判断这次复现是否真的有效，稳定复现后引导转成 Skill）。
+        外加一个轻量工具<strong>最近会话记录</strong>：退出时把 <code>session_id</code> 记下来，方便手动 <code>--resume</code> 时查。
         全程个人单机运行，无需人工整理。以下是当前真实代码状态的完整机制说明，非规划稿。
       </p>
       <div class="stat-strip">
-        <div class="stat"><div class="n">26</div><div class="l">活跃 instincts</div></div>
-        <div class="stat"><div class="n">34</div><div class="l">project memories</div></div>
-        <div class="stat"><div class="n">1</div><div class="l">已晋升规则</div></div>
-        <div class="stat"><div class="n">5</div><div class="l">Hook（PostToolUse/Stop×2/PreCompact/SessionEnd/SessionStart）</div></div>
-        <div class="stat"><div class="n">77</div><div class="l">单测全绿</div></div>
+        <div class="stat"><div class="n">77</div><div class="l">活跃 instincts</div></div>
+        <div class="stat"><div class="n">99</div><div class="l">project memories</div></div>
+        <div class="stat"><div class="n">2</div><div class="l">已晋升规则</div></div>
+        <div class="stat"><div class="n">4</div><div class="l">流程候选（procedure）</div></div>
+        <div class="stat"><div class="n">6</div><div class="l">Hook 事件（8 条 command）</div></div>
+        <div class="stat"><div class="n">113</div><div class="l">单测全绿</div></div>
       </div>
     </div>
 
     <section id="overview">
       <h2><span class="num">01</span> 总体架构</h2>
-      <p class="purpose">阅读目的：理解两条管线各自的输入输出边界，以及它们为什么共用 Stop/SessionStart 钩子入口却互不干扰。</p>
+      <p class="purpose">阅读目的：理解三条管线各自的输入输出边界，以及它们为什么共用 Stop/SessionEnd 等钩子入口却互不干扰。</p>
 
       <h3>管线 A：语义 / 程序性记忆闭环</h3>
       <div class="diagram-wrap">
@@ -435,11 +441,59 @@ flowchart TD
     ReadSummary --> Context["[project-recap] 区块<br/>排在 [habit]/[project] 之前"]
         </pre>
       </div>
+
+      <h3>管线 C：流程挖掘（procedure mining，新增）</h3>
+      <div class="diagram-wrap">
+        <pre class="mermaid">
+flowchart TD
+    Stop3["Stop Hook: mine_procedures.py<br/>(第3条command，跟extract.py/summarize.py并列)"]
+    ClaimP["procedure_store.try_claim_session()"]
+    Stop3 --> ClaimP
+    ClaimP -- "claimed=False" --> SkipP["跳过本次"]
+    ClaimP -- "claimed=True" --> ParseP["transcript.parse_new_turns(cursor)"]
+    ParseP -- "空" --> ReleaseEmpty["release_session(cursor不变)"]
+    ParseP -- "轮次数&lt;2" --> HoldP["不release，留到下次<br/>(还没有下一轮反馈可判断成功与否)"]
+    ParseP -- "轮次数≥2" --> LoopEp["逐个 episode（唯独跳过最后一轮）"]
+
+    LoopEp --> QueryObs["按[ts_start,ts_end)区间查observations"]
+    QueryObs --> CountCheck{"工具调用数≥3?"}
+    CountCheck -- 否 --> NextEp["跳过该episode，不调LLM"]
+    CountCheck -- 是 --> CallLLM["provider.mine_procedure(<br/>steps_summary, assistant_text,<br/>next_user_feedback)"]
+
+    CallLLM -- "异常" --> NextEp
+    CallLLM -- "is_procedure=false" --> NextEp
+    CallLLM -- "is_procedure=true" --> Dedup["find_similar_procedure(task_type)<br/>char_jaccard全量比对，无domain门槛"]
+
+    Dedup --> IsSuccess["is_successful：LLM结合下一轮用户反馈判断<br/>(是否在纠正/拒绝这次方案)"]
+    IsSuccess --> Conf["confidence = update_confidence(prior, hit=is_successful)<br/>(不成功真的会扣分，复用instinct的MISS_DELTA)"]
+    Conf --> Revive{"命中的procedure是deprecated?"}
+    Revive -- 是 --> ReviveIt["复活为candidate，skill_asked重置false"]
+    Revive -- 否 --> KeepStatus["沿用/新建candidate"]
+    ReviveIt --> ThresholdP{"confidence≥PROMOTE_THRESHOLD(0.7)?"}
+    KeepStatus --> ThresholdP
+    ThresholdP -- 是 --> Promote["status=promoted"]
+    ThresholdP -- 否 --> StayCand["仍是candidate"]
+    Promote --> WriteP[("memory/procedures/{id}.md")]
+    StayCand --> WriteP
+    WriteP --> NextEp
+    NextEp --> LoopEp
+    LoopEp -- 全部episode处理完 --> ReleaseP["release_session(new_turns[-2].uuid)<br/>(最后一轮留给下次连着它的下一轮一起判断)"]
+
+    Promote -.-> SysMsg["hook输出JSON的systemMessage字段<br/>(Stop事件唯一能让用户看到提示的方式)"]
+
+    UserPrompt["UserPromptSubmit: notify_pending_procedures.py"]
+    WriteP -. "status=promoted且skill_asked=false" .-> UserPrompt
+    UserPrompt --> AskUser["注入[procedure-pending]上下文<br/>Claude主动问：是否正确？是否转Skill？"]
+    AskUser -- "用户说不正确" --> Deprecate["Claude手动把status改为deprecated"]
+    AskUser -- "用户确认转换" --> WriteSkill[(".claude/skills/{id}/SKILL.md<br/>Claude读procedure文件手动写，非自动化代码")]
+        </pre>
+      </div>
       <p style="font-size:0.86rem;color:var(--text-dim)">
         所有 Hook 由 <code>.claude/settings.json</code> 注册，命令都指向 <code>.venv/bin/python3</code>（不能用裸
-        <code>python3</code>，因为模块级 <code>import memory_lib</code> 发生在任何 try/except 之前）。<code>Stop</code> 下同时挂了
-        <code>extract.py</code> 和 <code>summarize.py</code> 两个 command，两条管线各自独立的 SQLite 游标互不影响。全部脚本以
-        <code>exit code 0</code> 结束，任何内部异常只写 stderr，不阻塞工具调用/会话结束/压缩/会话启动。
+        <code>python3</code>，因为模块级 <code>import memory_lib</code> 发生在任何 try/except 之前）。<code>Stop</code> 下挂了
+        <code>extract.py</code>/<code>summarize.py</code>/<code>mine_procedures.py</code> 三个 command，<code>SessionEnd</code> 下挂了
+        <code>summarize.py</code>/<code>record_session.py</code> 两个 command，各管线各自独立的 SQLite 游标互不影响。全部脚本以
+        <code>exit code 0</code> 结束，任何内部异常只写 stderr，不阻塞工具调用/会话结束/压缩/会话启动/用户输入。
       </p>
     </section>
 
@@ -530,7 +584,7 @@ flowchart TD
     <section id="inject">
       <h2><span class="num">04</span> 注入 · <code>inject.py</code>（SessionStart）</h2>
       <p class="purpose">阅读目的：确认最终打到 stdout、被 Claude Code 自动注入上下文的内容具体由哪几段拼成，以及孤儿 session 补漏何时发生。</p>
-      <p>SessionStart（含 <code>/compact</code> 触发的那次）是官方确认 stdout 会被直接注入上下文的事件之一。输出按顺序由三段拼接：</p>
+      <p>SessionStart（含 <code>/compact</code> 触发的那次）是官方确认 stdout 会被直接注入上下文的事件之一。内容按顺序由三段拼接：</p>
       <div class="card-grid">
         <div class="card">
           <h4><span class="pill recap">project-recap</span> 情景记忆（新增，排最前）</h4>
@@ -545,6 +599,14 @@ flowchart TD
           <h4><span class="pill memory">project/feedback/error/workflow</span> 相似度排序截断</h4>
           <p><code>build_query(cwd)</code> = 项目名 + <code>git log --oneline -3</code>；<code>list_memories()</code> 全量取出后走 embedding 召回 Top-5。</p>
         </div>
+      </div>
+      <div class="callout win">
+        <strong>2026-07-31：改用 JSON 输出，用户能看到具体注入了什么（新增）</strong>
+        以前直接 <code>print("\n".join(sections))</code>，三段内容确实进了 Claude 的上下文，但用户在界面上完全看不到任何提示——不知道
+        这次到底召回了哪些习惯/记忆。改成输出 JSON：<code>{"systemMessage": "...", "hookSpecificOutput": {"hookEventName": "SessionStart",
+        "additionalContext": "..."}}</code>。<code>additionalContext</code> 是三段拼接后的原文，跟以前给 Claude 看的内容完全一致；
+        <code>systemMessage</code>（hooks 通用字段，所有事件都会展示给用户）是新加的一份<strong>高亮摘要</strong>——按类别列计数，
+        每一条都完整展示、不截断/不省略，多条内容逐行列出而不是堆在一行里，只在真正有内容注入时才输出。
       </div>
       <div class="callout recap">
         <strong>孤儿 session 补漏：不阻塞会话启动</strong>
@@ -603,8 +665,95 @@ flowchart TD
       风格是叙述性 markdown，不是结构化列表——这是 prompt 明确要求的（<code>_SUMMARY_SYSTEM_PROMPT</code>），避免变成第二份 memories 列表。</p>
     </section>
 
+    <section id="procedure">
+      <h2><span class="num">06</span> 流程挖掘 · <code>mine_procedures.py</code>（Stop）</h2>
+      <p class="purpose">阅读目的：理解为什么"多步骤有序流程"不能直接塞进 instinct 机制，以及"复现频率"和"是否正确"这两件事是怎么被拆开衡量的。</p>
+      <p>动机来自真实观察：同一类任务（比如"写含 mermaid 图的 md 文档，再转成带图片的 html"）在不同会话里，实际执行的工具调用序列高度相似。
+      hook 拿不到模型的原始思维链（不稳定、不建议作为数据源），但能稳定拿到的是 <strong>工具调用序列</strong>（<code>observe.py</code> 已记录）和
+      <strong>assistant 文本</strong>（<code>transcript.py</code> 已能解析）——这条管线就是把这两样东西按"用户轮次"切成 episode，喂给 LLM 识别
+      是否构成"值得记住的多步骤可复用流程"，新增一种独立记忆类型 <code>procedure</code>（跟 instinct 的单条 trigger→action 规则不同，
+      是有序步骤列表），复用 instinct 现成的 confidence 演化机制来判断何时"够格晋升"。</p>
+
+      <div class="callout open">
+        <strong>2026-07-30 修正：只看复现次数不够，还得判断这次复现是否真的有效</strong>
+        最初版本里 <code>hit_count</code>/<code>confidence</code> 只反映"这个流程复现了几次"，从不判断"这次复现的结果是否真的解决了问题"——
+        一个反复被模型给出但实际没用的流程，一样会被无脑加分直至晋升。修正方案两层：<strong>自动层</strong>用"下一轮用户消息"作为信号
+        （这个数据 <code>transcript.parse_new_turns</code> 已经有，不用新采集），LLM 结合它判断 <code>is_successful</code>（用户是否在纠正/拒绝这个方案），
+        接着 <code>confidence = update_confidence(prior, hit=is_successful)</code>——不成功时真的会扣分（复用 <code>confidence.py</code> 现成的
+        <code>MISS_DELTA</code>，之前从未被调用过）。<strong>人工层兜底</strong>：转 Skill 确认时一并问"这个流程是否正确"，答"不正确"就标记
+        <code>status=deprecated</code>，不执行转换。
+      </div>
+
+      <p><strong>episode 边界的连带调整</strong>：判断 <code>is_successful</code> 需要看"下一轮用户反馈"，所以每个 episode 必须存在下一轮才能处理——
+      处理范围从"全部轮次"收窄为 <code>range(len(new_turns) - 1)</code>，最后一轮留到下次 Stop（届时会出现新的下一轮）。游标推进也相应改成条件式：
+      轮次数 <code>&lt;2</code> 时完全不 release（跟 <code>summarize.py</code> 未达阈值时"不release、留到下次累积"是同一处理哲学）；
+      够处理时 release 到 <code>new_turns[-2].uuid</code> 而不是最后一条，避免最后一轮被跳过丢失。</p>
+
+      <p><strong>晋升即高亮，不做上下文注入</strong>：procedure 一旦 <code>confidence≥PROMOTE_THRESHOLD</code> 首次跨过阈值，就通过 hook 输出 JSON 的
+      <code>systemMessage</code> 字段提示用户（Stop 事件的普通 stdout 不会展示给用户，<code>systemMessage</code> 是唯一能让用户在 Stop 场景看到提示的机制）——
+      刻意不像 instinct 那样注入每次 SessionStart 上下文，procedure 内容比一行 trigger 重得多，用户自己决定要不要看。</p>
+
+      <h3>交互式转 Skill：谁在什么时机做什么</h3>
+      <div class="diagram-wrap">
+        <pre class="mermaid">
+sequenceDiagram
+    participant Mine as mine_procedures.py
+    participant File as memory/procedures/{id}.md
+    participant Notify as notify_pending_procedures.py
+    participant Claude as Claude(主对话)
+    participant User as 用户
+
+    Mine->>File: status=promoted, skill_asked=false
+    Mine-->>User: hook JSON systemMessage（高亮提示）
+
+    Note over User: 用户下一次发消息（同会话或新会话）
+    User->>Notify: UserPromptSubmit 触发
+    Notify->>File: 扫描 status=promoted 且 skill_asked=false
+    File-->>Notify: 命中 {id}
+    Notify->>File: 写回 skill_asked=true（只提醒一次）
+    Notify-->>Claude: stdout 直接注入 [procedure-pending] 上下文<br/>（UserPromptSubmit 是三个"stdout即上下文"事件之一）
+
+    Claude->>User: 先问"是否正确？是否要转成 Skill？"
+
+    alt 用户说不正确
+        User->>Claude: 反馈无效/有问题
+        Claude->>File: 手动改 status=deprecated
+    else 用户确认转换
+        User->>Claude: 是
+        Claude->>File: 读 task_type + 步骤列表
+        Claude->>Claude: 写 .claude/skills/{id}/SKILL.md
+    end
+        </pre>
+      </div>
+      <p style="font-size:0.86rem;color:var(--text-dim)">
+        生成 <code>SKILL.md</code> 不是新增的自动化代码——是 Claude 在对话里用 Read/Write 工具完成的正常操作，套用项目里已有 Skill 的
+        frontmatter 格式（<code>name</code> + <code>description</code>）。<code>deprecated</code> 的 procedure 如果后续又被
+        <code>find_similar_procedure</code> 命中，会"复活"为 candidate 重新参与晋升判断（<code>skill_asked</code> 也重置），
+        跟 instinct 命中已 deprecated 条目时的处理逻辑一致。
+      </p>
+      <p style="font-size:0.86rem;color:var(--text-dim)">当前真实数据：<code>memory/procedures/</code> 下 4 条候选，全部还是 <code>status=candidate</code>，
+      还没有一条在真实使用中稳定复现到跨过晋升阈值——这是预期状态，晋升本来就需要多次真实复现才会发生。</p>
+    </section>
+
+    <section id="recent-sessions">
+      <h2><span class="num">07</span> 最近会话记录 · <code>record_session.py</code>（SessionEnd）</h2>
+      <p class="purpose">阅读目的：确认这个小工具解决的是"记不住 session_id"这个具体痛点，跟 <code>project-summary.md</code> 的关系是什么。</p>
+      <p>Claude Code 退出时会提示"可以用 <code>--resume &lt;session_id&gt;</code> 恢复"，但 hook 拦不到、改不了 CLI 自己打印的那句提示。
+      能做的是在 <code>SessionEnd</code> 时把 <code>session_id</code>、退出时间、内容摘要记进一份本地文件，用户想 resume 时自己去查——
+      不做 SessionStart 注入（用户明确要求不需要，靠自己翻文件）。</p>
+      <p>沿用项目里已有的"隐藏 JSON 存真实数据 + 全量重新渲染人类可读 md"模式（对照 <code>storage.py</code> 的
+      <code>.dedup_state.json</code> + <code>regenerate_rules_file()</code>）：<code>memory/.recent-sessions.json</code> 是真正数据源，
+      按 <code>session_id</code> upsert（同一 session 多次退出更新而非重复追加），按 <code>last_exit_ts</code> 降序裁剪到最多 10 条；
+      每次都重新渲染成 <code>memory/recent-sessions.md</code>。<code>summary_excerpt</code> 直接取当前 <code>project-summary.md</code>
+      内容截断到约 200 字符——不强求跨脚本执行顺序（<code>record_session.py</code> 独立于 <code>summarize.py</code> 读写各自的文件，
+      读到的可能是这次退出前最新的一版，够用即可）。</p>
+      <p style="font-size:0.86rem;color:var(--text-dim)">两个产物文件都不进 git：<code>session_id</code> 只在本机有意义（resume 依赖本机的 transcript 文件），
+      跟 <code>.dedup_state.json</code>/sqlite 状态文件性质一样是本地运行状态。<code>SessionEnd</code> 不保证在 crash/kill 时触发，
+      跟 <code>project-summary.md</code> 现有的限制一致。</p>
+    </section>
+
     <section id="taxonomy">
-      <h2><span class="num">06</span> 记忆分层与来源</h2>
+      <h2><span class="num">08</span> 记忆分层与来源</h2>
       <p class="purpose">阅读目的：区分五类落盘数据分别对应哪种记忆类型、来自哪条生产链路。</p>
       <div class="table-wrap">
         <table>
@@ -636,9 +785,15 @@ flowchart TD
             </tr>
             <tr>
               <td><span class="pill recap">recap</span> <code>project-summary.md</code></td>
-              <td>情景记忆，"当前对话进展到哪了"（新增）</td>
+              <td>情景记忆，"当前对话进展到哪了"</td>
               <td>直接解析 transcript JSONL 的对话轮次，滚动 LLM 总结</td>
               <td>无语义去重——单份持续覆盖演进，不是多条记录</td>
+            </tr>
+            <tr>
+              <td><span class="pill instinct">procedure</span> <code>procedures/*.md</code>（新增）</td>
+              <td>程序性记忆，多步骤有序流程（跟 instinct 的单条规则不同）</td>
+              <td>按用户轮次切 episode，LLM <code>mine_procedure()</code> 判断是否构成流程 + 是否成功</td>
+              <td><code>find_similar_procedure</code>（无 domain 门槛，全量比对 task_type）；confidence 演化复用 instinct 机制</td>
             </tr>
           </tbody>
         </table>
@@ -649,12 +804,12 @@ flowchart TD
         <div class="confbar-track"><div class="confbar-fill" style="width:75%"></div></div>
         <div class="confbar-val">0.75</div>
       </div>
-      <p style="font-size:0.85rem;color:var(--text-dim)">唯一晋升规则；其余 25 条活跃 instinct 均未达 0.7 门槛，34 条 memories 全部来自项目事实链路。
-      这批数据是 2026-07-28 清空重置后、系统在本次会话中真实运行重新沉淀的，id 已全部是英文 kebab-case。</p>
+      <p style="font-size:0.85rem;color:var(--text-dim)">2 条晋升规则；其余活跃 instinct（共 77 条）均未达 0.7 门槛，99 条 memories 全部来自项目事实链路，
+      4 条 procedure 候选均未跨过晋升阈值。这批数据是 2026-07-28 清空重置后、系统在本次长会话中真实运行持续沉淀的，id 已全部是英文 kebab-case。</p>
     </section>
 
     <section id="storage">
-      <h2><span class="num">07</span> 存储层：文件 vs SQLite</h2>
+      <h2><span class="num">09</span> 存储层：文件 vs SQLite</h2>
       <p class="purpose">阅读目的：说明为什么同一个系统里一部分数据用 git 可追踪的 markdown，一部分用 SQLite，不是随意选择。</p>
       <div class="table-wrap">
         <table>
@@ -662,10 +817,13 @@ flowchart TD
           <tbody>
             <tr><td><code>instincts/</code> / <code>memories/</code> / <code>rules/auto-evolved.md</code></td><td>YAML frontmatter + Markdown</td><td><span class="pill good">是</span></td><td>要能 <code>git diff</code> 看行为习惯怎么演化、能手工打开改一条记录，可读性优先</td></tr>
             <tr><td><code>project-summary.md</code></td><td>纯 Markdown 叙述文本</td><td><span class="pill good">是</span></td><td>持续演进的单份总结，人可读可 review，跟其余可提交数据同等对待</td></tr>
+            <tr><td><code>procedures/*.md</code></td><td>YAML frontmatter + Markdown</td><td><span class="pill good">是</span></td><td>多步骤流程记录，同样要能 diff 看演化、手工打开改一条</td></tr>
             <tr><td><code>.observations.sqlite3</code></td><td>SQLite（<code>observations</code> + <code>session_progress</code> 两表）</td><td><span class="pill bad">否</span></td><td>高频追加、纯行为信号、从不给人看；原 jsonl 手写轮转逻辑复杂度和收益不成正比</td></tr>
             <tr><td><code>.transcript_progress.sqlite3</code></td><td>SQLite（<code>session_progress</code> 表，含 <code>transcript_path</code>）</td><td><span class="pill bad">否</span></td><td>情景记忆管线独立的游标状态，跟语义记忆管线的游标是两套互不共享的表</td></tr>
+            <tr><td><code>.procedure_progress.sqlite3</code></td><td>SQLite（<code>procedure_progress</code> 表）</td><td><span class="pill bad">否</span></td><td>流程挖掘管线自己独立的游标状态，跟前两条管线的游标都不共享</td></tr>
             <tr><td><code>.vector_cache.sqlite3</code></td><td>SQLite + sqlite-vec 扩展</td><td><span class="pill bad">否</span></td><td>embedding 结果缓存，按 memory_id + 内容哈希失效，纯派生数据，可随时重建</td></tr>
             <tr><td><code>.dedup_state.json</code></td><td>纯 JSON</td><td><span class="pill bad">否</span></td><td>observe.py 的短期防抖动状态</td></tr>
+            <tr><td><code>.recent-sessions.json</code> + <code>recent-sessions.md</code></td><td>JSON + 渲染出的 Markdown</td><td><span class="pill bad">否</span></td><td><code>session_id</code> 只在本机有意义（resume 依赖本机 transcript 文件），纯本地状态</td></tr>
           </tbody>
         </table>
       </div>
@@ -674,28 +832,31 @@ flowchart TD
     </section>
 
     <section id="confidence">
-      <h2><span class="num">08</span> 置信度演化</h2>
+      <h2><span class="num">10</span> 置信度演化</h2>
       <p class="purpose">阅读目的：确认命中/未命中如何量化影响 confidence，以及晋升/废弃两个阈值的实际效果。</p>
       <div class="table-wrap">
         <table>
           <thead><tr><th>常量</th><th>值</th><th>含义</th></tr></thead>
           <tbody>
-            <tr><td><code>INITIAL_CONFIDENCE</code></td><td>0.5</td><td>新建 instinct 的起始值</td></tr>
+            <tr><td><code>INITIAL_CONFIDENCE</code></td><td>0.5</td><td>新建 instinct/procedure 的起始值</td></tr>
             <tr><td><code>HIT_DELTA</code></td><td>+0.05</td><td>命中一次的增量</td></tr>
+            <tr><td><code>MISS_DELTA</code></td><td>-0.05</td><td>未命中/不成功一次的增量（procedure 的 <code>is_successful=false</code> 会真正触发这条路径，之前从未被调用过）</td></tr>
             <tr><td><code>CONFIDENCE_CAP</code></td><td>0.9</td><td>命中不会超过这个上限</td></tr>
-            <tr><td><code>PROMOTE_THRESHOLD</code></td><td>0.7</td><td>≥ 此值才会被 <code>regenerate_rules_file</code> 收进规则文件、被 <code>inject.py</code> 注入</td></tr>
-            <tr><td><code>DEPRECATE_THRESHOLD</code></td><td>0.55</td><td>&lt; 此值标记 <code>deprecated: true</code>（衰减机制本身当前已停用，见 §3）</td></tr>
+            <tr><td><code>PROMOTE_THRESHOLD</code></td><td>0.7</td><td>≥ 此值才会被 <code>regenerate_rules_file</code> 收进规则文件被注入，或 procedure 晋升为 <code>promoted</code></td></tr>
+            <tr><td><code>DEPRECATE_THRESHOLD</code></td><td>0.55</td><td>&lt; 此值标记 <code>deprecated: true</code>（instinct 的自动衰减机制本身当前已停用，见 §3；procedure 走人工兜底标记，见 §6）</td></tr>
             <tr><td><code>RULES_LIMIT</code></td><td>30</td><td>规则文件/注入的 instinct 条数硬上限</td></tr>
             <tr><td><code>_TURN_THRESHOLD</code></td><td>100</td><td>情景记忆 Stop 常规触发的轮次阈值（PreCompact/SessionEnd 跳过此判断）</td></tr>
-            <tr><td><code>STALE_PROCESSING_SECONDS</code></td><td>600</td><td>两条管线的并发锁 / 孤儿判定共用这个超时值</td></tr>
+            <tr><td><code>STALE_PROCESSING_SECONDS</code></td><td>600</td><td>三条管线的并发锁 / 孤儿判定共用这个超时值</td></tr>
           </tbody>
         </table>
       </div>
+      <p style="font-size:0.86rem;color:var(--text-dim)">procedure 完全复用 instinct 这套常量和 <code>update_confidence()</code> 函数，没有单独开一套配置——
+      新建候选也统一走 <code>update_confidence(INITIAL_CONFIDENCE, hit=is_successful)</code>，不是无条件从 0.5 起步，这样首次就失败也能立刻扣分。</p>
     </section>
 
     <section id="providers">
-      <h2><span class="num">09</span> Provider 降级矩阵</h2>
-      <p class="purpose">阅读目的：确认没有配置任何 API Key 时两条管线是否还能跑通（能，只是精度打折）。</p>
+      <h2><span class="num">11</span> Provider 降级矩阵</h2>
+      <p class="purpose">阅读目的：确认没有配置任何 API Key 时三条管线是否还能跑通（能，只是精度打折，流程挖掘会整个停摆而非降级——见下方 <code>NullProvider</code> 说明）。</p>
       <div class="card-grid">
         <div class="card">
           <h4>LLM：<code>get_llm_provider()</code></h4>
@@ -708,6 +869,11 @@ flowchart TD
           不推进 cursor。<code>NullProvider</code> 原样返回 <code>previous_summary</code>：没有真正总结能力，但至少不丢已有总结。</p>
         </div>
         <div class="card">
+          <h4>LLM 第三能力：<code>mine_procedure()</code>（新增）</h4>
+          <p><code>DeepSeekProvider</code> 同样是请求/解析失败抛异常，由 <code>mine_procedures.py</code> 逐 episode 兜底、不中断整批。
+          <code>NullProvider</code> 恒返回 <code>None</code>——流程挖掘是纯语义判断，规则匹配识别不出"这段操作是否值得记住"，没有 LLM 时干脆不挖掘。</p>
+        </div>
+        <div class="card">
           <h4>Embedding：<code>get_embedding_provider()</code></h4>
           <p><code>ARK_API_KEY</code> 非空时先探活（<code>embed(["ping"])</code>，5s 超时），成功 → <code>ArkProvider</code>
           （<code>SUPPORTS_CACHE=True</code>，走 sqlite-vec 缓存）；探活失败或未配置 → <code>TfidfProvider</code>
@@ -717,7 +883,7 @@ flowchart TD
     </section>
 
     <section id="privacy">
-      <h2><span class="num">10</span> 隐私过滤</h2>
+      <h2><span class="num">12</span> 隐私过滤</h2>
       <p class="purpose">阅读目的：确认"完整采集"这条对齐得物的路线，具体由哪几层机制兜住隐私风险。</p>
       <ol style="max-width:74ch">
         <li><strong>tool_input 完整保留，tool_response 只截前500字符</strong>——2026-07-28 对齐得物后不再做字段白名单裁剪，这是主动放开的采集范围，用户在 <code>AskUserQuestion</code> 里明确选择了"完全对齐得物"这个选项。</li>
@@ -727,7 +893,7 @@ flowchart TD
     </section>
 
     <section id="open">
-      <h2><span class="num">11</span> 已知问题 / 待定项</h2>
+      <h2><span class="num">13</span> 已知问题 / 待定项</h2>
       <div class="card-grid">
         <div class="card">
           <h4>衰减机制待重新设计</h4>
@@ -735,11 +901,16 @@ flowchart TD
         </div>
         <div class="card">
           <h4>transcript JSONL 是未文档化格式</h4>
-          <p>Claude Code 升级可能导致 <code>parse_new_turns</code> 解析失败，届时静默返回空列表、总结停止更新，不会崩溃但需人工发现。</p>
+          <p>Claude Code 升级可能导致 <code>parse_new_turns</code> 解析失败，届时静默返回空列表、总结/流程挖掘都停止更新，不会崩溃但需人工发现。</p>
         </div>
         <div class="card">
           <h4>两条验收标准需真实使用观察</h4>
           <p>"连续对话超100轮自动更新"和"手动 <code>/compact</code> 触发强制刷新"——机制已通过模拟验证，但没有真实场景触发过。</p>
+        </div>
+        <div class="card">
+          <h4>procedure 晋升尚未在真实使用中观察到</h4>
+          <p>当前 4 条候选都还是 <code>status=candidate</code>，"复现+成功判定累积到跨过 0.7 阈值"这条链路只在测试里模拟验证过，
+          真实场景下多久能等到一次晋升、<code>systemMessage</code> 提示的实际观感如何，还需要真实使用积累。</p>
         </div>
         <div class="card">
           <h4>存储作用域未定</h4>
@@ -750,7 +921,7 @@ flowchart TD
     </section>
 
     <section id="tests">
-      <h2><span class="num">12</span> 测试与验证</h2>
+      <h2><span class="num">14</span> 测试与验证</h2>
       <p class="purpose">阅读目的：确认哪些行为是单测覆盖的，哪些是靠真实运行验证的（两者互补，非互相替代）。</p>
       <div class="table-wrap">
         <table>
@@ -763,19 +934,36 @@ flowchart TD
             <tr><td><code>test_vector_cache.py</code></td><td>sqlite-vec KNN 排序、内容不变跳过重新 embed</td></tr>
             <tr><td><code>test_storage.py</code></td><td><code>list_promoted_instincts</code> 的筛选+排序</td></tr>
             <tr><td><code>test_observation_store.py</code></td><td>SQLite 追加、增量查询、按时间保留、认领/释放/并发跳过/过期重新认领</td></tr>
-            <tr><td><code>test_transcript.py</code></td><td>用户/assistant消息识别与过滤、多条assistant拼接、游标过滤、超长截断、畸形行容错</td></tr>
+            <tr><td><code>test_transcript.py</code></td><td>用户/assistant消息识别与过滤、多条assistant拼接、游标过滤、超长截断、畸形行容错、<code>ts</code>字段提取</td></tr>
             <tr><td><code>test_transcript_store.py</code></td><td>非阻塞 claim/release、stale 重新认领、孤儿扫描（不扫自己/不扫未超时）</td></tr>
+            <tr><td><code>test_procedure_store.py</code></td><td>procedure 文件 CRUD、独立游标 claim/release、待询问 skill 列表筛选与标记</td></tr>
+            <tr><td><code>test_mine_procedures.py</code></td><td>新建/累加命中/晋升触发systemMessage/工具调用数不足过滤/LLM空结果/异常降级/is_successful扣分/episode边界与条件游标推进/deprecated复活，共10个场景</td></tr>
+            <tr><td><code>test_notify_pending_procedures.py</code></td><td>有pending输出且置位/无pending空输出/已问过不重复/多条同时处理</td></tr>
+            <tr><td><code>test_record_session.py</code></td><td>新建/更新已有条目不重复/裁剪到10条最新/project-summary缺失时摘要为空/摘要截断</td></tr>
           </tbody>
         </table>
       </div>
       <p>单测之外，每次改动都用真实 stdin JSON payload 手动跑过完整链路——含情景记忆管线的端到端验证：构造 120 轮合成对话，
       真实调用 LLM 生成总结、落盘 <code>project-summary.md</code>、<code>inject.py</code> 读出并以 <code>[project-recap]</code> 排最前注入，
-      全程验证无污染数据残留。</p>
+      全程验证无污染数据残留；流程挖掘管线在本次长会话真实运行中也已产出过真实 procedure 候选文件。</p>
     </section>
 
     <footer>
-      内容基于仓库真实代码状态生成，非规划稿。设计文档见 <code>docs/plans/2026-07-27-claude-code-memory-system-design.md</code>（语义记忆闭环）
-      和 <code>docs/plans/2026-07-29-project-summary-memory-design.md</code>（情景记忆滚动总结）。
+      内容基于仓库真实代码状态生成，非规划稿。设计文档见 <code>docs/plans/2026-07-27-claude-code-memory-system-design.md</code>（语义记忆闭环）、
+      <code>docs/plans/2026-07-29-project-summary-memory-design.md</code>（情景记忆滚动总结）、
+      <code>docs/plans/2026-07-30-procedure-mining-and-skill-generation-design.md</code>（流程挖掘 + 正确性信号修订）
+      和 <code>docs/plans/2026-07-31-recent-sessions-record-design.md</code>（最近会话记录）。
+      打包部署见 <code>docs/build-and-deploy.md</code>。
     </footer>
   </main>
 </div>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: prefersDark ? "dark" : "default",
+    securityLevel: "loose",
+  });
+</script>

@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""SessionStart Hook: 召回相关记忆并格式化注入到会话上下文。
+"""SessionStart Hook: 召回相关记忆并格式化注入到会话上下文，同时给用户一条可见的高亮提示。
 
 输入协议（Claude Code 官方 Hooks 文档，SessionStart 事件）：
 stdin 接收一段 JSON，字段包括 session_id / cwd /
 hook_event_name（固定 "SessionStart"）等。
 
-约束：stdout 内容会被直接注入 Claude 的上下文，因此 stdout 只能输出
-格式化后的记忆文本，任何调试/错误信息一律写 stderr；脚本必须永远以
+输出协议：不再是纯文本 stdout（那样用户在界面上完全看不到注入了什么），改成 JSON：
+{"systemMessage": "<用户可见的高亮摘要>",
+ "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "<真正喂给 Claude 的完整内容，跟原来纯文本版一致>"}}
+systemMessage 是 Claude Code hooks 的通用字段，所有事件都会展示给用户；additionalContext 才是
+真正被"插入对话最前面"给 Claude 看的内容，两者内容不同——systemMessage 只是简短高亮，
+additionalContext 是完整原文。任何调试/错误信息一律写 stderr；脚本必须永远以
 exit code 0 结束，不能阻塞会话启动。
 """
 from __future__ import annotations
@@ -60,6 +64,25 @@ def _format_instincts(instincts: list[dict]) -> str:
         domain = inst.get("domain", "")
         trigger = inst.get("trigger", "")
         lines.append(f"[habit][{domain}] {trigger}")
+    return "\n".join(lines)
+
+
+def _build_highlight(has_recap: bool, instincts: list[dict], top_memories: list[dict]) -> str:
+    """给用户看的高亮摘要：本次 SessionStart 具体注入了哪些内容，完整列出、不做截断/省略。
+
+    多条内容按列表逐行展示（每条单独一行），不堆到一行里用顿号拼接。
+    """
+    lines = ["🧠 c-memory 本次注入："]
+    if has_recap:
+        lines.append("· [project-recap] 项目总结 1 段")
+    if instincts:
+        lines.append(f"· [habit] {len(instincts)} 条：")
+        for inst in instincts:
+            lines.append(f"  - {inst.get('trigger', '')}")
+    if top_memories:
+        lines.append(f"· [memory] {len(top_memories)} 条：")
+        for mem in top_memories:
+            lines.append(f"  - {mem.get('description') or mem.get('body', '')}")
     return "\n".join(lines)
 
 
@@ -127,10 +150,13 @@ def main() -> None:
             pass
 
     sections = []
+    has_recap = False
+    top_memories: list[dict] = []
 
     project_summary = _read_project_summary()
     if project_summary:
         sections.append(f"[project-recap]\n{project_summary}")
+        has_recap = True
 
     instincts = list_promoted_instincts()
     if instincts:
@@ -147,7 +173,14 @@ def main() -> None:
     if not sections:
         return
 
-    print("\n".join(sections))
+    output = {
+        "systemMessage": _build_highlight(has_recap, instincts, top_memories),
+        "hookSpecificOutput": {
+            "hookEventName": "SessionStart",
+            "additionalContext": "\n".join(sections),
+        },
+    }
+    print(json.dumps(output, ensure_ascii=False))
 
 
 if __name__ == "__main__":

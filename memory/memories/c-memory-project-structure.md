@@ -1,12 +1,12 @@
 ---
 created: '2026-07-31'
-description: c-memory 是 Python 项目，包含 hooks/、memory_lib/、docs/plans/ 等目录
+description: c-memory 项目的 hooks/inject.py 现在输出 JSON 格式，包含 systemMessage 和 hookSpecificOutput.additionalContext。
 id: c-memory-project-structure
 keywords:
 - c-memory
-- python
-- 目录结构
+- hooks
+- JSON
 type: project
 ---
 
-项目根目录为 /Users/doubao/workspace/vibe/c-memory，使用 Python 开发。主要目录包括 hooks/（存放钩子脚本如 summarize.py、record_session.py）、memory_lib/（核心库如 storage.py）、docs/plans/（设计文档）。配置文件位于 .claude/settings.json，使用 .gitignore 管理忽略文件。
+在 SessionStart hook 中，inject.py 输出 JSON，其中 systemMessage 是用户可见的高亮摘要，仅在真正有内容注入时输出；additionalContext 包含给 Claude 的上下文，与之前纯 stdout 内容一致。此改动不影响召回逻辑。
